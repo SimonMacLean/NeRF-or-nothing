@@ -519,43 +519,118 @@ namespace ScratchNerf
 
             return means;
         }
-
         public static (Vector3 compositeRgb, float distance, float accumulation, float[] weights) VolumetricRendering((Vector3 color, float density)[] samples, float[] tVals, Vector3 direction, bool whiteBackground)
         {
             int numSamples = samples.Length;
-            float[] tMidpoints = new float[numSamples - 1];
-            float[] tDistances = new float[numSamples - 1];
-            float[] delta = new float[numSamples - 1];
-            float[] densityDelta = new float[numSamples - 1];
             float[] alpha = new float[numSamples - 1];
-            float[] trans = new float[numSamples];
+            float[] transmittance = new float[numSamples];
             float[] weights = new float[numSamples - 1];
-            for (int i = 0; i < numSamples - 1; i++)
-            {
-                tMidpoints[i] = 0.5f * (tVals[i] + tVals[i + 1]);
-                tDistances[i] = tVals[i + 1] - tVals[i];
-                delta[i] = tDistances[i] * direction.Length();
-                densityDelta[i] = samples[i].density * delta[i];
-            }
-            for (int i = 0; i < numSamples - 1; i++)
-            {
-                alpha[i] = 1 - MathF.Exp(-densityDelta[i]);
-                trans[i] = i == 0 ? 1f : trans[i - 1] * MathF.Exp(-densityDelta[i - 1]);
-                weights[i] = alpha[i] * trans[i];
-            }
             Vector3 compRgb = Vector3.Zero;
             float acc = 0f;
             float weightedDistanceSum = 0f;
             for (int i = 0; i < numSamples - 1; i++)
             {
+                alpha[i] = 1 - MathF.Exp(-samples[i].density * (tVals[i + 1] - tVals[i]) * direction.Length());
+                transmittance[i] = i == 0 ? 1f : transmittance[i - 1] * (1 - alpha[i - 1]);
+                weights[i] = alpha[i] * transmittance[i];
                 compRgb += weights[i] * samples[i].color;
                 acc += weights[i];
-                weightedDistanceSum += weights[i] * tMidpoints[i];
+                weightedDistanceSum += weights[i] * (tVals[i] + tVals[i + 1]) / 2;
             }
-            float distance = acc > 0 ? weightedDistanceSum / acc : float.PositiveInfinity;
-            distance = Math.Clamp(distance, tVals[0], tVals[^1]);
+            float distance = Math.Clamp(acc > 0 ? weightedDistanceSum / acc : float.PositiveInfinity, tVals[0], tVals[^1]);
             if (whiteBackground) compRgb += new Vector3(1f - acc);
             return (compRgb, distance, acc, weights);
+        }
+        public static (Vector3 compositeRgb, float distance, float accumulation, float[] alpha, float[] transmittance, float[] weights) CachedVolumetricRendering((Vector3 color, float density)[] samples, float[] tVals, Vector3 direction, bool whiteBackground)
+        {
+            int numSamples = samples.Length;
+            float[] alpha = new float[numSamples - 1];
+            float[] transmittance = new float[numSamples];
+            float[] weights = new float[numSamples - 1];
+            Vector3 compRgb = Vector3.Zero;
+            float acc = 0f;
+            float weightedDistanceSum = 0f;
+            for (int i = 0; i < numSamples - 1; i++)
+            {
+                alpha[i] = 1 - MathF.Exp(-samples[i].density * (tVals[i + 1] - tVals[i]) * direction.Length());
+                transmittance[i] = i == 0 ? 1f : transmittance[i - 1] * (1 - alpha[i - 1]);
+                weights[i] = alpha[i] * transmittance[i];
+                compRgb += weights[i] * samples[i].color;
+                acc += weights[i];
+                weightedDistanceSum += weights[i] * (tVals[i] + tVals[i + 1]) / 2;
+            }
+            float distance = Math.Clamp(acc > 0 ? weightedDistanceSum / acc : float.PositiveInfinity, tVals[0], tVals[^1]);
+            if (whiteBackground) compRgb += new Vector3(1f - acc);
+            return (compRgb, distance, acc, alpha, transmittance, weights);
+        }
+        
+        public static (Vector3 color, float density)[] VolumetricRenderingGradient(Vector3 compositeRgbGradient, float returnedDistance, float returnedAccumulation, float[] returnedAlpha, float[] returnedTransmittance, float[] returnedWeights, float[] tVals, Vector3 direction, bool whiteBackground)
+        {
+            int numSamples = returnedAlpha.Length + 1;
+            (Vector3 color, float density)[] gradients = new (Vector3 color, float density)[numSamples];
+            // Gradient of the background term
+            if (whiteBackground)
+            {
+                Vector3 dcompRgb_dacc = -compositeRgbGradient;
+                float dacc_dweight = 1f;
+                for (int i = 0; i < numSamples - 1; i++)
+                {
+                    Vector3 dcompRgb_dcolor = dcompRgb_dacc * dacc_dweight;
+                    gradients[i].color -= dcompRgb_dcolor;
+                }
+            }
+            // Backpropagate through the main loop
+            for (int i = numSamples - 2; i >= 0; i--)
+            {
+                // Gradient of compRgb += weights[i] * samples[i].color;
+                Vector3 dcompRgb_dcolor = compositeRgbGradient * returnedWeights[i];
+                gradients[i].color += dcompRgb_dcolor;
+
+                // Gradient of weights[i] = alpha[i] * transmittance[i];
+                Vector3 dcompRgb_dweight = compositeRgbGradient * gradients[i].color;
+                float dweight_dalpha = returnedTransmittance[i];
+                float dweight_dtransmittance = returnedAlpha[i];
+
+                Vector3 dalpha_dcompRgb = dcompRgb_dweight * dweight_dalpha;
+                Vector3 dtransmittance_dcompRgb = dcompRgb_dweight * dweight_dtransmittance;
+
+                float alphaGradient = Vector3.Dot(dalpha_dcompRgb, Vector3.One);
+                float transmittanceGradient = Vector3.Dot(dtransmittance_dcompRgb, Vector3.One);
+
+                // Backpropagate transmittance
+                float dalpha_ddensity;
+                for (int j = i; j >= 0; j--)
+                {
+                    if (j < i)
+                    {
+                        float dtransmittance_dtransmittancePrev = 1 - returnedAlpha[j];
+                        transmittanceGradient *= dtransmittance_dtransmittancePrev;
+                    }
+                    float dtransmittance_dalpha = -transmittanceGradient / (1 - returnedAlpha[j] + float.Epsilon);
+                    dalpha_ddensity = returnedAlpha[j] * (1 - returnedAlpha[j]);
+                    gradients[j].density -= dtransmittance_dalpha * dalpha_ddensity;
+                }
+
+                // Gradient of alpha[i] = 1 - exp(-samples[i].density * (tVals[i + 1] - tVals[i]) * direction.Length());
+                float deltaT = (tVals[i + 1] - tVals[i]) * direction.Length();
+                dalpha_ddensity = deltaT * MathF.Exp(-gradients[i].density * deltaT);
+                float ddensity_dalpha = alphaGradient * dalpha_ddensity;
+                gradients[i].density += ddensity_dalpha;
+
+                // Gradient of acc += weights[i]
+                float dacc_dweight = 1f;
+                float dweight_ddensity = -deltaT * returnedTransmittance[i] * MathF.Exp(-gradients[i].density * deltaT);
+                float ddensity_dacc = dacc_dweight * dweight_ddensity;
+                gradients[i].density += ddensity_dacc;
+
+                // Gradient of weightedDistanceSum += weights[i] * (tVals[i] + tVals[i + 1]) / 2
+                float midpoint = (tVals[i] + tVals[i + 1]) / 2;
+                float dweightedSum_dweight = midpoint;
+                float ddensity_dweightedSum = dweightedSum_dweight * dweight_ddensity;
+                gradients[i].density += ddensity_dweightedSum;
+            }
+
+            return gradients;
         }
         public static (float[] tVals, (Vector3 mean, Matrix3x3 covariance)[] samples) SampleAlongRay(Random random, Vector3 origin, Vector3 direction, float radius, int numSamples, float near, float far, bool randomized,
             bool linearDisparity,
