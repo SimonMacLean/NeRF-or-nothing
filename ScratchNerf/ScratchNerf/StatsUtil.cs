@@ -15,6 +15,6 @@ namespace ScratchNerf
         public float[] psnrs;
         public float gradNorm;
         public float gradAbsMax;
-        public float graphNormClipped;
+        public float gradNormClipped;
     }
 }

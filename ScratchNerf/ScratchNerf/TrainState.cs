@@ -36,16 +36,16 @@ namespace ScratchNerf
             return variables;
         }
     }
-    public enum Batching
+    public enum DatasetType
     {
-        SingleImage,
-        AllImages
+        Multicam,
+        Blender,
+        LLFF
     }
     public static class Config
     {
 
-        public static string DatasetLoader { get; set; } = "multicam";  // The type of dataset loader to use.
-        public static Batching Batching { get; set; } = Batching.AllImages;  // Batch composition, [single_image, all_images].
+        public static DatasetType DatasetLoader { get; set; } = DatasetType.Multicam;  // The type of dataset loader to use.
         public static int BatchSize { get; set; } = 4096;  // The number of rays/pixels in each batch.
         public static int Factor { get; set; } = 0;  // The downsample factor of images, 0 for no downsampling.
         public static bool Spherify { get; set; } = false;  // Set to True for spherical 360 scenes.
@@ -59,6 +59,8 @@ namespace ScratchNerf
         public static float GradMaxVal { get; set; } = 0f;  // Gradient clipping value, disabled if == 0.
         public static int MaxSteps { get; set; } = 1000000;  // The number of optimization steps.
         public static int SaveEvery { get; set; } = 100000;  // The number of steps to save a checkpoint.
+        public static int PrintEvery { get; set; } = 100;  // The number of steps to print the loss.
+        public static int GcEvery { get; set; } = 10000;  // The number of steps to render an image.
         public static int TestRenderInterval { get; set; } = 1;  // The interval between images saved to disk.
         public static bool DisableMultiscaleLoss { get; set; } = false;  // If True, disable multiscale loss.
         public static bool Randomized { get; set; } = true;  // Use randomized stratified sampling.

@@ -103,8 +103,8 @@ namespace ScratchNerf
             return results;
         }
 
-        public float[] GetGradient(Ray[] rays, bool randomized, bool whiteBackground,
-            Func<(Vector3 CompositeRgb, float Distance, float Accumulation)[,], Vector3[,]> getReturnGradient)
+        public (StatsUtil, float[]) GetGradient(Ray[] rays, bool randomized, bool whiteBackground,
+            Func<(Vector3 CompositeRgb, float Distance, float Accumulation)[,] , Vector3[,]> getReturnGradient, Func<(Vector3 CompositeRgb, float Distance, float Accumulation)[,], (float loss, StatsUtil stats)> LossFn)
         {
             int numRays = rays.Length;
             (Vector3 CompositeRgb, float Distance, float Accumulation)[,] results =
@@ -116,6 +116,7 @@ namespace ScratchNerf
             (Vector3 rawRgb, float rawDensity)[,][] rawOutput = new (Vector3 rawRgb, float rawDensity)[NumLevels,numRays][];
             (float[] tVals, (Vector3 mean, Matrix3x3 covariance)[] samples)[,] res =
                 new (float[] tVals, (Vector3 mean, Matrix3x3 covariance)[] samples)[NumLevels, numRays];
+            float[,][][][] inputs = new float[NumLevels, numRays][][][];
             for (int iLevel = 0; iLevel < NumLevels; iLevel++)
             {
                 if (iLevel == 0)
@@ -148,36 +149,26 @@ namespace ScratchNerf
                             MipHelpers.IntegratedPositionalEncoding(res[iLevel, iRay].samples[iSample], MinDegPoint,
                                 MaxDegPoint);
                     dirsEnc[iRay] = MipHelpers.PositionalEncoding(rays[iRay].Direction, 0, DegView);
-                }
-                for (int iRay = 0; iRay < res.Length; iRay++)
-                {
-                    rawOutput[iLevel,iRay] = new (Vector3 rgb, float density)[NumSamples + 1 - iLevel];
-                    for (int iSample = 0; iSample < res[iLevel, iRay].samples.Length; iSample++)
-                        rawOutput[iLevel,iRay][iSample] = mlp.Call(samplesEnc[iRay, iSample], dirsEnc[iRay]);
-                }
-
-                for (int iRay = 0; iRay < res.Length; iRay++)
-                {
+                    inputs[iLevel, iRay] = new float[NumSamples + 1 - iLevel][][];
+                    rawOutput[iLevel, iRay] = new (Vector3 rgb, float density)[NumSamples + 1 - iLevel];
                     finalOutput[iLevel, iRay] = new (Vector3 rgb, float density)[NumSamples + 1 - iLevel];
                     for (int iSample = 0; iSample < res[iLevel, iRay].samples.Length; iSample++)
                     {
-                        Vector3 rawRgb = rawOutput[iLevel,iRay][iSample].rawRgb;
-                        float rawDensity = rawOutput[iLevel,iRay][iSample].rawDensity;
+                        (Vector3 rawRgb, float rawDensity, inputs[iLevel, iRay][iSample]) = mlp.CallCached(samplesEnc[iRay, iSample], dirsEnc[iRay]);
+                        rawOutput[iLevel, iRay][iSample] = (rawRgb, rawDensity);
                         Vector3 rgb = new Vector3(RgbActivation(rawRgb.X), RgbActivation(rawRgb.Y), RgbActivation(rawRgb.Z)) * (1 + 2 * RgbPadding) - Vector3.One * RgbPadding;
                         float density = DensityActivation(rawDensity + DensityBias);
                         finalOutput[iLevel, iRay][iSample] = (rgb, density);
                     }
-                }
-
-                for (int iRay = 0; iRay < numRays; iRay++)
                     (results[iLevel, iRay].CompositeRgb, results[iLevel, iRay].Distance, results[iLevel, iRay].Accumulation, alpha[iLevel, iRay], transmittance[iLevel, iRay],
                         weights[iLevel, iRay]) = MipHelpers.CachedVolumetricRendering(finalOutput[iLevel, iRay],
-                            res[iLevel, iRay].tVals, rays[iRay].Direction, whiteBackground);
+                        res[iLevel, iRay].tVals, rays[iRay].Direction, whiteBackground);
+                }
             }
-
             Vector3[,] rgbGradient = getReturnGradient(results);
+            (float loss, StatsUtil stats) = LossFn(results);
             (Vector3 rgbGradient, float densityGradient)[,][] finalOutputGradient = new (Vector3 rgbGradient, float densityGradient)[NumLevels,numRays][];
-            (Vector3 rgbGradient, float densityGradient)[,][] rawOutputGradient = new (Vector3 rgbGradient, float densityGradient)[NumLevels,numRays][];
+            float[,][][] paramsGradient = new float[NumLevels, numRays][][];
             for (int iLevel = NumLevels - 1; iLevel >= 0; iLevel--)
             {
                 for (int iRay = 0; iRay < numRays; iRay++)
@@ -186,10 +177,7 @@ namespace ScratchNerf
                         results[iLevel, iRay].Distance, results[iLevel, iRay].Accumulation, alpha[iLevel, iRay],
                         transmittance[iLevel, iRay], weights[iLevel, iRay], res[iLevel, iRay].tVals, rays[iRay].Direction,
                         whiteBackground);
-                }
-                for (int iRay = 0; iRay < res.Length; iRay++)
-                {
-                    rawOutputGradient[iLevel, iRay] = new (Vector3 rgbGradient, float densityGradient)[NumSamples + 1 - iLevel];
+                    paramsGradient[iLevel, iRay] = new float[NumSamples + 1 - iLevel][];
                     for (int iSample = 0; iSample < res[iLevel, iRay].samples.Length; iSample++)
                     {
                         (Vector3 rawRgb, float rawDensity) = rawOutput[iLevel, iRay][iSample];
@@ -202,26 +190,32 @@ namespace ScratchNerf
                             rgbGrad.Z * RgbActivationGradient(rawRgb.Z)
                         ) * (1 + 2 * RgbPadding);
                         float rawDensityGrad = densityGrad * DensityActivationGradient(rawDensity + DensityBias);
-                        rawOutputGradient[iLevel, iRay][iSample] = (rawRgbGrad, rawDensityGrad);
+                        paramsGradient[iLevel, iRay][iSample] = mlp.GetGradient(inputs[iLevel, iRay][iSample], rawRgbGrad, rawDensityGrad);
                     }
                 }
             }
-
+            float[] summedParamsGradient = new float[mlp.allParams.Length];
+            for(int iLevel = 0; iLevel < NumLevels; iLevel++)
+                for(int iRay = 0; iRay < numRays; iRay++)
+                    for(int iSample = 0; iSample < res[iLevel, iRay].samples.Length; iSample++)
+                        for(int i = 0; i < mlp.allParams.Length; i++)
+                            summedParamsGradient[i] += paramsGradient[iLevel, iRay][iSample][i];
+            return (stats, summedParamsGradient);
         }
 
-        public static (MipNerfModel, (Vector3 CompositeRgb, float Distance, float Accumulation)[,]) ConstructMipNerf(Ray[] rays)
+        public static (MipNerfModel, float[]) ConstructMipNerf(Ray[] rays)
         {
             MipNerfModel model = new();
-            (Vector3 CompositeRgb, float Distance, float Accumulation)[,] results = model.Call(rays, false, false);
-            return (model, results);
+            return (model, model.mlp.allParams);
         }
 
     }
 
-    public struct Ray(Vector3 origin, Vector3 direction, float radius, float near, float far, float lossMult)
+    public struct Ray(Vector3 origin, Vector3 direction, Vector3 viewDir, float radius, float near, float far, float lossMult)
     {
         public Vector3 Origin = origin;
         public Vector3 Direction = direction;
+        public Vector3 ViewDir = viewDir;
         public float Radius = radius;
         public float Near = near;
         public float Far = far;
