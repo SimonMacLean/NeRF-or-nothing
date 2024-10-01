@@ -17,7 +17,7 @@ namespace ScratchNerf
             // see https://aka.ms/applicationconfiguration.
             //ApplicationConfiguration.Initialize();
             //Application.Run(new Form1());
-
+            Train();
         }
 
         static void Train()
