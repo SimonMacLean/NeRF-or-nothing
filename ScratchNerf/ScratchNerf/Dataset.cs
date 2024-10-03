@@ -190,7 +190,7 @@ namespace ScratchNerf
             (int, int, int)[] possibleIndices = new (int, int, int)[rays.Length];
             for (int i = 0; i < Config.BatchSize; i++)
             {
-                (int, int, int) indexToCheck = (rand.Next(rays.Length), rand.Next(h), rand.Next(w));
+                (int, int, int) indexToCheck = (rand.Next(rays.GetLength(0)), rand.Next(h), rand.Next(w));
                 int flattenedIndex = indexToCheck.Item1 * h * w + indexToCheck.Item2 * w + indexToCheck.Item3;
                 rayIndices[i] = possibleIndices[flattenedIndex] == (0,0,0) ? indexToCheck : (possibleIndices[flattenedIndex].Item1 - 1, possibleIndices[flattenedIndex].Item2, possibleIndices[flattenedIndex].Item3);
                 (int, int, int) unflattenedI = (flattenedIndex / (h * w), (flattenedIndex % (h * w)) / w, flattenedIndex % w);
@@ -241,7 +241,7 @@ namespace ScratchNerf
             float scale = 1 / (bounds.Cast<float>().Min() + 0.75f);
             for (int i = 0; i < posesArr.Length; i++)
             {
-                for (int j = 0; j < 3; j++)
+                for (int j = 0; j < 2; j++)
                 {
                     (poses[i].rotation[j, 0], poses[i].rotation[j, 1]) = (poses[i].rotation[j, 1], -poses[i].rotation[j, 0]);
                     bounds[i,j] *= scale;

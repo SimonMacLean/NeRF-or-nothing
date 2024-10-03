@@ -492,8 +492,8 @@ namespace ScratchNerf
                     Vector3 yVar = xCoordinate.xCovariance.Diagonal * scale * scale;
                     for (int j = 0; j < numDims; j++)
                     {
-                        means[i][2 * j] = ExpectedSin(y[j], yVar[j]).mean;
-                        means[i][2 * j + 1] = ExpectedSin(y[j] + MathF.PI * 0.5f, yVar[j]).mean;
+                        means[2*i][j] = ExpectedSin(y[j], yVar[j]).mean;
+                        means[2*i + 1][j] = ExpectedSin(y[j] + MathF.PI * 0.5f, yVar[j]).mean;
                     }
                 }
             }
@@ -559,7 +559,7 @@ namespace ScratchNerf
                 acc += weights[i];
                 weightedDistanceSum += weights[i] * (tVals[i] + tVals[i + 1]) / 2;
             }
-            float distance = Math.Clamp(acc > 0 ? weightedDistanceSum / acc : float.PositiveInfinity, tVals[0], tVals[^1]);
+            float distance = Math.Clamp(acc > 0 ? weightedDistanceSum / acc : float.MaxValue, tVals[0], tVals[^1]);
             if (whiteBackground) compRgb += new Vector3(1f - acc);
             return (compRgb, distance, acc, alpha, transmittance, weights);
         }
@@ -649,8 +649,8 @@ namespace ScratchNerf
             float[] midpoints = new float[numSamples];
             for (int i = 0; i < numSamples; i++) midpoints[i] = 0.5f * (tVals[i] + tVals[i + 1]);
             for (int i = numSamples; i > 0; i--) tVals[i] = tVals[i - 1];
-            for (int i = 1; i < numSamples; i++) tVals[i] = midpoints[i - 1];
-            for (int i = 0; i <= numSamples; i++) tVals[i] += (tVals[i + 1] - tVals[i]) * random.NextSingle();
+            for (int i = 1; i <= numSamples; i++) tVals[i] = midpoints[i - 1];
+            for (int i = 0; i < numSamples; i++) tVals[i] += (tVals[i + 1] - tVals[i]) * random.NextSingle();
             return (tVals, CastRay(tVals, origin, direction, radius, rayShape));
         }
 
@@ -812,33 +812,51 @@ namespace ScratchNerf
             weightSum += padding;
             float[] pdf = weights.Select(w => w / weightSum).ToArray();
             float[] cdf = new float[pdf.Length + 1];
-            for (int i = 1; i < cdf.Length; i++) cdf[i] = Math.Min(1, cdf[i - 1] + pdf[i - 1]);
+            cdf[0] = 0f;
+            for (int i = 1; i < cdf.Length - 1; i++)
+            {
+                cdf[i] = Math.Min(1, cdf[i - 1] + pdf[i - 1]);
+            }
             cdf[^1] = 1f;
             float[] u;
             if (randomized)
             {
-                u = new float[numSamples];
                 float s = 1f / numSamples;
-                for (int i = 0; i < numSamples; i++) u[i] = i * s + (float)random.NextDouble() * s;
+                u = new float[numSamples];
+                for (int i = 0; i < numSamples; i++)
+                {
+                    u[i] = i * s + (float)random.NextDouble() * s;
+                    u[i] = Math.Min(u[i], 1f - float.Epsilon);
+                }
             }
             else
             {
                 u = Enumerable.Range(0, numSamples)
-                    .Select(i => i / (float)(numSamples - 1))
+                    .Select(i => i * (1f - float.Epsilon) / (numSamples - 1))
                     .ToArray();
             }
+
+            // Find intervals
             float[] samples = new float[numSamples];
             for (int i = 0; i < numSamples; i++)
             {
-                int index = Array.BinarySearch(cdf, u[i]);
-                if (index < 0) index = ~index - 1;
-                float cdf0 = index > 0 ? cdf[index - 1] : 0;
-                float cdf1 = cdf[index];
-                float bin0 = bins[index];
-                float bin1 = bins[index + 1];
+                bool[] mask = cdf.Select(c => u[i] >= c).ToArray();
+                (float cdf0, float cdf1) = FindInterval(cdf);
+                (float bin0, float bin1) = FindInterval(bins);
+
                 float t = (u[i] - cdf0) / (cdf1 - cdf0);
+                t = Math.Max(0, Math.Min(1, t)); // Clip t to [0, 1]
                 samples[i] = bin0 + t * (bin1 - bin0);
+                continue;
+
+                (float x0, float x1) FindInterval(float[] x)
+                {
+                    float x0 = x.Where((val, index) => mask[index]).Max();
+                    float x1 = x.Where((val, index) => !mask[index]).Min();
+                    return (x0, x1);
+                }
             }
+
             return samples;
         }
     }

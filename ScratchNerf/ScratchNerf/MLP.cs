@@ -22,11 +22,27 @@ namespace ScratchNerf
         private float[][,] weights;
         private float[][] biases;
         private float[][] inputs;
-        //flatten weights and biases into 1Darray
+        private float[][] weightedSums;
+
         public float[] allParams
         {
-            get => weights.SelectMany(arr => arr.Cast<float>())
-                .Concat(biases.SelectMany(arr => arr)).ToArray();
+            get
+            {
+                int numParams = weights.Sum(arr => arr.Length) + biases.Sum(arr => arr.Length);
+                float[] allParams = new float[numParams];
+                int numIterated = 0;
+                foreach (float[,] weight in weights)
+                {
+                    Buffer.BlockCopy(weight, 0, allParams, numIterated * sizeof(float), weight.Length * sizeof(float));
+                    numIterated += weight.Length;
+                }
+                foreach (float[] bias in biases)
+                {
+                    Buffer.BlockCopy(bias, 0, allParams, numIterated * sizeof(float), bias.Length * sizeof(float));
+                    numIterated += bias.Length;
+                }
+                return allParams;
+            }
             set
             {
                 int numIterated = 0;
@@ -52,6 +68,7 @@ namespace ScratchNerf
             weights = new float[NetDepth + NetDepthCondition + 2][,];
             biases = new float[NetDepth + NetDepthCondition + 2][];
             inputs = new float[NetDepth + NetDepthCondition + 2][];
+            weightedSums = new float[NetDepth + NetDepthCondition + 2][];
             weights[0] = new float[NetWidth, LocationDimension * LocationEncodings];
             for (int i = 1; i < NetDepth; i++) weights[i] = new float[NetWidth, i % SkipLayer == 0 ? NetWidth + LocationDimension * LocationEncodings : NetWidth];
             weights[NetDepth] = new float[NumDensityChannels, NetWidth];
@@ -69,61 +86,53 @@ namespace ScratchNerf
         }
         public (Vector3 RawRgb, float RawDensity) Call(Vector3[] positionEncoded, Vector3[] directionEncoded)
         {
-            float[] x = new float[LocationDimension * LocationEncodings];
-            for (int i = 0; i < LocationEncodings; i++)
-                for (int j = 0; j < LocationDimension; j++)
-                    x[i * LocationDimension + j] = positionEncoded[i][j];
-            float[] inputs = (float[])x.Clone();
-            for (int i = 0; i < NetDepth; i++)
-            {
-                this.inputs[i] = x;
-                if (i % SkipLayer == 0 && i > 0) x = [.. x, .. inputs];
-                x = ApplyLayer(x, weights[i], biases[i], NetActivation);
-            }
-            this.inputs[NetDepth] = x;
-            float rawDensity = ApplyLayer(x, weights[NetDepth], biases[NetDepth], f => f)[0];
-            float[] direction = new float[DirectionDimension * DirectionEncodings];
-            for (int i = 0; i < DirectionEncodings; i++)
-                for (int j = 0; j < DirectionDimension; j++)
-                    direction[i * DirectionDimension + j] = directionEncoded[i][j];
-            x = [.. x, .. direction];
-            for (int i = 0; i < NetDepthCondition; i++)
-            {
-                this.inputs[NetDepth + 1 + i] = x;
-                x = ApplyLayer(x, weights[NetDepth + 1 + i], biases[NetDepth + 1 + i], NetActivation);
-            }
-            float[] rawRgb = ApplyLayer(x, weights[NetDepth + NetDepthCondition + 1], biases[NetDepth + NetDepthCondition + 1], f => f);
-            Vector3 rawRgbVec = new(rawRgb[0], rawRgb[1], rawRgb[2]);
-            return (rawRgbVec, rawDensity);
-        }
-        public (Vector3 RawRgb, float RawDensity, float[][] inputs) CallCached(Vector3[] positionEncoded, Vector3[] directionEncoded)
-        {
-            float[] x = new float[LocationDimension * LocationEncodings];
+            inputs[0] = new float[LocationDimension * LocationEncodings];
             for (int i = 0; i < LocationEncodings; i++)
             for (int j = 0; j < LocationDimension; j++)
-                x[i * LocationDimension + j] = positionEncoded[i][j];
-            float[] inputs = (float[])x.Clone();
+                inputs[0][i * LocationDimension + j] = positionEncoded[i][j];
             for (int i = 0; i < NetDepth; i++)
             {
-                if (i % SkipLayer == 0 && i > 0) x = [.. x, .. inputs];
-                this.inputs[i] = x;
-                x = ApplyLayer(x, weights[i], biases[i], NetActivation);
+                if (i % SkipLayer == 0 && i > 0) inputs[i] = [.. inputs[i], .. inputs[0]];
+                (inputs[i + 1], weightedSums[i]) = ApplyLayer(inputs[i], weights[i], biases[i], NetActivation);
             }
-            this.inputs[NetDepth] = x;
-            float rawDensity = ApplyLayer(x, weights[NetDepth], biases[NetDepth], f => f)[0];
+            (float[] rawDensity, weightedSums[NetDepth]) = ApplyLayer(inputs[NetDepth], weights[NetDepth], biases[NetDepth], f => f);
             float[] direction = new float[DirectionDimension * DirectionEncodings];
             for (int i = 0; i < DirectionEncodings; i++)
             for (int j = 0; j < DirectionDimension; j++)
                 direction[i * DirectionDimension + j] = directionEncoded[i][j];
-            x = [.. x, .. direction];
+            inputs[NetDepth + 1] = [.. inputs[NetDepth], .. direction];
             for (int i = 0; i < NetDepthCondition; i++)
             {
-                this.inputs[NetDepth + 1 + i] = x;
-                x = ApplyLayer(x, weights[NetDepth + 1 + i], biases[NetDepth + 1 + i], NetActivation);
+                (inputs[NetDepth + 2 + i], weightedSums[NetDepth + 1 + i]) = ApplyLayer(inputs[NetDepth + 1 + i], weights[NetDepth + 1 + i], biases[NetDepth + 1 + i], NetActivation);
             }
-            float[] rawRgb = ApplyLayer(x, weights[^1], biases[^1], f => f);
+            (float[] rawRgb, weightedSums[NetDepth + 1 + NetDepthCondition]) = ApplyLayer(inputs[NetDepth + 1 + NetDepthCondition], weights[^1], biases[^1], f => f);
             Vector3 rawRgbVec = new(rawRgb[0], rawRgb[1], rawRgb[2]);
-            return (rawRgbVec, rawDensity, this.inputs);
+            return (rawRgbVec, rawDensity[0]);
+        }
+        public (Vector3 RawRgb, float RawDensity, float[][] inputs) CallCached(Vector3[] positionEncoded, Vector3[] directionEncoded)
+        {
+            inputs[0] = new float[LocationDimension * LocationEncodings];
+            for (int i = 0; i < LocationEncodings; i++)
+            for (int j = 0; j < LocationDimension; j++)
+                inputs[0][i * LocationDimension + j] = positionEncoded[i][j];
+            for (int i = 0; i < NetDepth; i++)
+            {
+                if (i % SkipLayer == 0 && i > 0) inputs[i] = [.. inputs[i], .. inputs[0]];
+                (inputs[i + 1], weightedSums[i]) = ApplyLayer(inputs[i], weights[i], biases[i], NetActivation);
+            }
+            (float[] rawDensity, weightedSums[NetDepth]) = ApplyLayer(inputs[NetDepth], weights[NetDepth], biases[NetDepth], f => f);
+            float[] direction = new float[DirectionDimension * DirectionEncodings];
+            for (int i = 0; i < DirectionEncodings; i++)
+            for (int j = 0; j < DirectionDimension; j++)
+                direction[i * DirectionDimension + j] = directionEncoded[i][j];
+            inputs[NetDepth + 1] = [.. inputs[NetDepth], .. direction];
+            for (int i = 0; i < NetDepthCondition; i++)
+            {
+                (inputs[NetDepth + 2 + i], weightedSums[NetDepth + 1 + i]) = ApplyLayer(inputs[NetDepth + 1 + i], weights[NetDepth + 1 + i], biases[NetDepth + 1 + i], NetActivation);
+            }
+            (float[] rawRgb, weightedSums[NetDepth + 1 + NetDepthCondition]) = ApplyLayer(inputs[NetDepth + 1 + NetDepthCondition], weights[^1], biases[^1], f => f);
+            Vector3 rawRgbVec = new(rawRgb[0], rawRgb[1], rawRgb[2]);
+            return (rawRgbVec, rawDensity[0], this.inputs);
         }
 
         public float[] GetGradient(float[][] inputs, Vector3 rawRgbGradient, float rawDensityGradient)
@@ -131,45 +140,60 @@ namespace ScratchNerf
             float[] rawRgbArrGrad = [rawRgbGradient.X, rawRgbGradient.Y, rawRgbGradient.Z];
             float[][,] weightGrads = new float[NetDepth + NetDepthCondition + 2][,];
             float[][] biasGrads = new float[NetDepth + NetDepthCondition + 2][];
-            (float[] xGrad, weightGrads[^1], biasGrads[^1]) = GetLayerGradient(inputs[^1], weights[^1], biases[^1], rawRgbArrGrad, f => 1);
+            (float[] xGrad, weightGrads[^1], biasGrads[^1]) = GetLayerGradient(inputs[^1], weights[^1], biases[^1], weightedSums[^1], rawRgbArrGrad, f => 1);
             for(int i = NetDepthCondition - 1; i >= 0; i--)
             {
-                (xGrad, weightGrads[NetDepth + 1 + i], biasGrads[NetDepth + 1 + i]) = GetLayerGradient(inputs[NetDepth + 1 + i], weights[NetDepth + 1 + i], biases[NetDepth + 1 + i], xGrad, NetActivationGrad);
+                (xGrad, weightGrads[NetDepth + 1 + i], biasGrads[NetDepth + 1 + i]) = GetLayerGradient(inputs[NetDepth + 1 + i], weights[NetDepth + 1 + i], biases[NetDepth + 1 + i], weightedSums[NetDepth + 1 + i], xGrad, NetActivationGrad);
             }
             xGrad = xGrad.Take(xGrad.Length - DirectionDimension * DirectionEncodings).ToArray();
-            (float[] xGradFromDensityToCombine, weightGrads[NetDepth], biasGrads[NetDepth]) = GetLayerGradient(inputs[NetDepth], weights[NetDepth], biases[NetDepth], new float[] { rawDensityGradient }, f => 1);
+            (float[] xGradFromDensityToCombine, weightGrads[NetDepth], biasGrads[NetDepth]) = GetLayerGradient(inputs[NetDepth], weights[NetDepth], biases[NetDepth], weightedSums[NetDepth], new float[] { rawDensityGradient }, f => 1);
             for(int i = 0; i < xGrad.Length; i++)
             {
                 xGrad[i] += xGradFromDensityToCombine[i];
             }
-            for(int i = NetDepth - 1; i >= 0; i--)
+
+            for (int i = NetDepth - 1; i >= 0; i--)
             {
-                (xGrad, weightGrads[i], biasGrads[i]) = GetLayerGradient(inputs[i], weights[i], biases[i], xGrad, NetActivationGrad);
+                (xGrad, weightGrads[i], biasGrads[i]) =
+                    GetLayerGradient(inputs[i], weights[i], biases[i], weightedSums[i], xGrad, NetActivationGrad);
             }
-            return weightGrads.SelectMany(arr => arr.Cast<float>())
-                .Concat(biasGrads.SelectMany(arr => arr)).ToArray();
+            int numGrads = weightGrads.Sum(arr => arr.Length) + biasGrads.Sum(arr => arr.Length);
+            float[] grads = new float[numGrads];
+            int numIterated = 0;
+            foreach (float[,] weightGrad in weightGrads)
+            {
+                Buffer.BlockCopy(weightGrad, 0, grads, numIterated * sizeof(float), weightGrad.Length * sizeof(float));
+                numIterated += weightGrad.Length;
+            }
+            foreach (float[] biasGrad in biasGrads)
+            {
+                Buffer.BlockCopy(biasGrad, 0, grads, numIterated * sizeof(float), biasGrad.Length * sizeof(float));
+                numIterated += biasGrad.Length;
+            }
+
+            return grads;
         }
 
-        private static float[] ApplyLayer(float[] inputs, float[,] weights, float[] biases, Func<float, float> activation)
+        private static (float[] outputs, float[] weightedSums) ApplyLayer(float[] inputs, float[,] weights, float[] biases, Func<float, float> activation)
         {
             if (weights.GetLength(1) != inputs.Length)
                 throw new ArgumentException("Weights and inputs must have the same number of features.");
             if (biases.Length != weights.GetLength(0))
                 throw new ArgumentException("Biases must have the same number of neurons as the weights.");
-            int numSamples = inputs.Length;
+            int inputDim = inputs.Length;
             int outputDim = weights.GetLength(0);
-            float[] outputs = new float[numSamples];
-
-            for (int i = 0; i < numSamples; i++)
+            float[] outputs = new float[outputDim];
+            float[] weightedSums = new float[outputDim];
+            for (int i = 0; i < outputDim; i++)
             {
-                float sum = 0f;
-                for (int j = 0; j < outputDim; j++) sum += inputs[i] * weights[j, i];
-                outputs[i] = activation(sum + biases[i]);
+                for (int j = 0; j < inputDim; j++) weightedSums[i] += inputs[j] * weights[i, j];
+                weightedSums[i] += biases[i];
+                outputs[i] = activation(weightedSums[i]);
             }
 
-            return outputs;
+            return (outputs, weightedSums);
         }
-        private static (float[] inputGradient, float[,] weightGradient, float[] biasGradient) GetLayerGradient(float[] inputs, float[,] weights, float[] biases, float[] outputGradient, Func<float, float> activationGradient)
+        private static (float[] inputGradient, float[,] weightGradient, float[] biasGradient) GetLayerGradient(float[] inputs, float[,] weights, float[] biases, float[] weightedSums, float[] outputGradient, Func<float, float> activationGradient)
         {
             int inputDim = inputs.Length;
             int outputDim = weights.GetLength(0);
@@ -182,10 +206,7 @@ namespace ScratchNerf
             float[] activationGrads = new float[outputDim];
             for (int j = 0; j < outputDim; j++)
             {
-                float sum = 0f;
-                for (int i = 0; i < inputDim; i++)
-                    sum += inputs[i] * weights[j, i];
-                activationGrads[j] = activationGradient(sum + biases[j]);
+                activationGrads[j] = activationGradient(weightedSums[j] + biases[j]);
                 float grad = outputGradient[j] * activationGrads[j];
                 biasGradient[j] = grad;
                 for (int i = 0; i < inputDim; i++)

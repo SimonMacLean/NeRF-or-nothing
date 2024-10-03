@@ -45,7 +45,7 @@ namespace ScratchNerf
     public static class Config
     {
 
-        public static DatasetType DatasetLoader { get; set; } = DatasetType.Multicam;  // The type of dataset loader to use.
+        public static DatasetType DatasetLoader { get; set; } = DatasetType.LLFF;  // The type of dataset loader to use.
         public static int BatchSize { get; set; } = 4096;  // The number of rays/pixels in each batch.
         public static int Factor { get; set; } = 0;  // The downsample factor of images, 0 for no downsampling.
         public static bool Spherify { get; set; } = false;  // Set to True for spherical 360 scenes.

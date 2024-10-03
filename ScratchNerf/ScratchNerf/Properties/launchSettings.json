@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "ScratchNerf": {
+      "commandName": "Project",
+      "workingDirectory": "C:\\Users\\simon\\Documents\\data\\nerfs"
+    }
+  }
+}

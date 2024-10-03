@@ -22,9 +22,9 @@ namespace ScratchNerf
 
         static void Train()
         {
-            Dataset dataset = DatasetFactory.CreateDataset(Split.Train, Flags.dataDir);
+            BinDataset binDataset = new BinDataset("C:\\Users\\simon\\Desktop\\mipnerf-main\\train_data.bin");
             Random rng = new();
-            (MipNerfModel model, float[] variables) = MipNerfModel.ConstructMipNerf(dataset.Peek().rays);
+            (MipNerfModel model, float[] variables) = MipNerfModel.ConstructMipNerf(binDataset.Peek().rays);
 
             int numParams = variables.Length;
             Console.WriteLine($"Number of parameters being optimized: {numParams}");
@@ -43,7 +43,7 @@ namespace ScratchNerf
 
             for (int step = 1; step <= Config.MaxSteps; step++)
             {
-                var batch = dataset.Next();
+                var batch = binDataset.Next();
                 float lr = learningRateFn(step);
 
                 StatsUtil stats = TrainStep(model, rng, state, batch, lr);
