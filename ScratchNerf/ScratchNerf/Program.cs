@@ -1,7 +1,4 @@
-using System.Data;
 using System.Numerics;
-using System.Reflection;
-using System.Threading.Tasks;
 
 namespace ScratchNerf
 {
@@ -22,15 +19,14 @@ namespace ScratchNerf
 
         static void Train()
         {
-            BinDataset binDataset = new BinDataset("C:\\Users\\simon\\Desktop\\mipnerf-main\\train_data.bin");
-            Random rng = new();
-            (MipNerfModel model, float[] variables) = MipNerfModel.ConstructMipNerf(binDataset.Peek().rays);
+            BinDataset binDataset = new("C:\\Users\\simon\\Desktop\\mipnerf-main\\train_data.bin");
+            (MipNerfModel model, float[] variables) = MipNerfModel.ConstructMipNerf();
 
             int numParams = variables.Length;
             Console.WriteLine($"Number of parameters being optimized: {numParams}");
 
-            AdamOptimizer optimizer = new AdamOptimizer(numParams, Config.LrInit);
-            TrainState state = new TrainState(optimizer);
+            AdamOptimizer optimizer = new(numParams, Config.LrInit);
+            TrainState state = new(optimizer);
 
             Func<int, float> learningRateFn = step => MathHelpers.LearningRateDecay(
                 step,
@@ -43,10 +39,10 @@ namespace ScratchNerf
 
             for (int step = 1; step <= Config.MaxSteps; step++)
             {
-                var batch = binDataset.Next();
+                (Ray[] rays, Vector3[] pixels) batch = binDataset.Next();
                 float lr = learningRateFn(step);
 
-                StatsUtil stats = TrainStep(model, rng, state, batch, lr);
+                StatsUtil stats = TrainStep(model, state, batch, lr);
 
                 if (step % Config.PrintEvery == 0)
                 {
@@ -55,13 +51,13 @@ namespace ScratchNerf
             }
         }
 
-        static StatsUtil TrainStep(MipNerfModel model, Random rng, TrainState state, (Ray[] rays, Vector3[] pixels) batch, float learningRate)
+        static StatsUtil TrainStep(MipNerfModel model, TrainState state, (Ray[] rays, Vector3[] pixels) batch, float learningRate)
         {
             int numLevels = model.NumLevels;
             int numRays = batch.rays.Length;
             float[] mask = batch.rays.Select((ray) => ray.LossMult).ToArray();
             Vector3[,] GetGradient(
-                (Vector3 CompositeRgb, float Distance, float Accumulation)[,] returnedValue)
+                Vector3[,] returnedValue)
             {
                 Vector3[,] gradient =
                     new Vector3[numLevels,
@@ -72,7 +68,7 @@ namespace ScratchNerf
                     float totalMask = mask.Sum();
                     for (int i = 0; i < returnedValue.GetLength(1); i++)
                     {
-                        Vector3 diffRgb = returnedValue[level, i].CompositeRgb - batch.pixels[i];
+                        Vector3 diffRgb = returnedValue[level, i] - batch.pixels[i];
                         float maskFactor = mask[i] / totalMask;
                         gradient[level, i] = 2 * maskFactor * diffRgb;
                         if (level < numLevels - 1)

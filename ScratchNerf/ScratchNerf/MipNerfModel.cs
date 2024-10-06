@@ -205,7 +205,7 @@ namespace ScratchNerf
             return (stats, summedParamsGradient);
         }
 
-        public static (MipNerfModel, float[]) ConstructMipNerf(Ray[] rays)
+        public static (MipNerfModel, float[]) ConstructMipNerf()
         {
             MipNerfModel model = new();
             return (model, model.mlp.allParams);

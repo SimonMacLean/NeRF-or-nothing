@@ -5,19 +5,19 @@ namespace ScratchNerf
     public class MLP
     {
         // Fields and Properties
-        public int NetDepth { get; set; } = 8;          // The depth of the first part of MLP.
-        public int NetWidth { get; set; } = 256;        // The width of the first part of MLP.
-        public int NetDepthCondition { get; set; } = 1; // The depth of the second part of MLP.
-        public int NetWidthCondition { get; set; } = 128; // The width of the second part of MLP.
-        public Func<float, float> NetActivation { get; set; } = ReLU; // Activation function (ReLU).
-        public Func<float, float> NetActivationGrad { get; set; } = ReLUGrad; // Gradient of the activation function.
-        public int NumRgbChannels { get; set; } = 3;    // Number of RGB channels.
-        public int NumDensityChannels { get; set; } = 1; // Number of density channels.
-        public int LocationDimension { get; set; } = 3; // Location dimension.
-        public int DirectionDimension { get; set; } = 3; // Direction dimension.
-        public int LocationEncodings { get; set; } = 1;
-        public int DirectionEncodings { get; set; } = 1;
-        public int SkipLayer { get; set; } = 4;         // Skip connection every N layers.
+        public int NetDepth  = 8;          // The depth of the first part of MLP.
+        public int NetWidth  = 256;        // The width of the first part of MLP.
+        public int NetDepthCondition  = 1; // The depth of the second part of MLP.
+        public int NetWidthCondition  = 128; // The width of the second part of MLP.
+        public Func<float, float> NetActivation  = ReLU; // Activation function (ReLU).
+        public Func<float, float> NetActivationGrad  = ReLUGrad; // Gradient of the activation function.
+        public int NumRgbChannels  = 3;    // Number of RGB channels.
+        public int NumDensityChannels  = 1; // Number of density channels.
+        public int LocationDimension  = 3; // Location dimension.
+        public int DirectionDimension  = 3; // Direction dimension.
+        public int LocationEncodings  = 1;
+        public int DirectionEncodings  = 1;
+        public int SkipLayer  = 4;         // Skip connection every N layers.
         public Random rand = new();
         private float[][,] weights;
         private float[][] biases;
@@ -132,7 +132,7 @@ namespace ScratchNerf
             }
             (float[] rawRgb, weightedSums[NetDepth + 1 + NetDepthCondition]) = ApplyLayer(inputs[NetDepth + 1 + NetDepthCondition], weights[^1], biases[^1], f => f);
             Vector3 rawRgbVec = new(rawRgb[0], rawRgb[1], rawRgb[2]);
-            return (rawRgbVec, rawDensity[0], this.inputs);
+            return (rawRgbVec, rawDensity[0], (float[][])inputs.Clone());
         }
 
         public float[] GetGradient(float[][] inputs, Vector3 rawRgbGradient, float rawDensityGradient)

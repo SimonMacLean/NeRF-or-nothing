@@ -1,7 +1,10 @@
 ﻿using System.Numerics;
+using System.Runtime.InteropServices;
 
 namespace ScratchNerf
 {
+    [Serializable]
+    [StructLayout(LayoutKind.Sequential, Size = 36)]
     // ReSharper disable once InconsistentNaming
     public struct Matrix3x3(
         float m11 = 0,
@@ -385,59 +388,6 @@ namespace ScratchNerf
             }
             return (mean, covariance);
         }
-        public static Array UpScale(Array array, int n)
-        {
-            if (n <= array.Rank)
-                throw new ArgumentException("The new dimension count must be greater than the original dimension count.");
-            int diff = n- array.Rank;
-            int[] dims = new int[n];
-            for (int i = 0; i < array.Rank; i++) dims[diff + i] = array.GetLength(i);
-            for (int i = 0; i < diff; i++) dims[i] = 1;
-            Array result = Array.CreateInstance(array.GetType().GetElementType()!, dims);
-            int[] index = new int[n];
-            int[] arrIndex = new int[array.Rank];
-            bool done = false;
-            while (!done)
-            {
-                result.SetValue(array.GetValue(arrIndex), index);
-                int focusedRank = n - 1;
-                while (focusedRank >= 0)
-                {
-                    index[focusedRank]++;
-                    if (index[focusedRank] < dims[focusedRank]) break;
-                    index[focusedRank] = 0;
-                    focusedRank--;
-                }
-                if (focusedRank < 0) done = true;
-            }
-            return result;
-        }
-        public static Array DownScale(Array array, int n)
-        {
-            if (n >= array.Rank)
-                throw new ArgumentException("The new dimension count must be less than the original dimension count.");
-            int diff = array.Rank - n;
-            int[] dims = new int[n];
-            for (int i = 0; i < n; i++) dims[i] = array.GetLength(diff + i);
-            Array result = Array.CreateInstance(array.GetType().GetElementType(), dims);
-            int[] index = new int[n];
-            int[] arrIndex = new int[array.Rank];
-            bool done = false;
-            while (!done)
-            {
-                result.SetValue(array.GetValue(arrIndex), index);
-                int focusedRank = n - 1;
-                while (focusedRank >= 0)
-                {
-                    arrIndex[diff + focusedRank]++;
-                    if (arrIndex[diff + focusedRank] < array.GetLength(diff + focusedRank)) break;
-                    arrIndex[diff + focusedRank] = 0;
-                    focusedRank--;
-                }
-                if (focusedRank < 0) done = true;
-            }
-            return result;
-        }
         public static (Vector3 mean, Matrix3x3 covariance) ConicalFrustumToGaussian(Vector3 direction, float startDistance, float endDistance, float baseRadius, bool diagonalCovariance)
         {
             float meanDistance = (startDistance + endDistance) / 2;
@@ -664,7 +614,6 @@ namespace ScratchNerf
             float[] weights,
             bool randomized,
             RayShape rayShape,
-            bool stopGrad,
             float resamplePadding)
         {
             // Blurpool the weights
@@ -682,17 +631,10 @@ namespace ScratchNerf
             float[] weightsBlur = new float[weightsMax.Length - 1];
             for (int i = 0; i < weightsBlur.Length; i++)
             {
-                weightsBlur[i] = 0.5f * (weightsMax[i] + weightsMax[i + 1]);
+                weightsBlur[i] = 0.5f * (weightsMax[i] + weightsMax[i + 1]) + resamplePadding;
             }
-
-            // Add padding
-            for (int i = 0; i < weightsBlur.Length; i++)
-            {
-                weightsBlur[i] += resamplePadding;
-            }
-
             // Resample
-            float[] newTVals = MathHelpers.SortedPiecewiseConstantPdf(random, tVals, weightsBlur, tVals.Length, randomized);
+            float[] newTVals = MathHelpers.SortedPiecewiseConstantPDF(random, tVals, weightsBlur, tVals.Length, randomized);
 
             return (newTVals, CastRay(newTVals, origin, direction, radius, rayShape));
         }
@@ -803,58 +745,80 @@ namespace ScratchNerf
 
             return delayRate * logLerp;
         }
-        public static float[] SortedPiecewiseConstantPdf(Random random, float[] bins, float[] weights, int numSamples, bool randomized)
+        public static float[] SortedPiecewiseConstantPDF(
+        Random rand,
+        float[] tVals,
+        float[] weights,
+        int numSamples,
+        bool randomized)
         {
-            const float eps = 1e-5f;
+            int numBins = weights.Length;
+
+            // Step 1: Adjust weights to avoid NaNs
+            float eps = 1e-5f;
             float weightSum = weights.Sum();
-            float padding = Math.Max(0, eps - weightSum);
-            weights = weights.Select(w => w + padding / weights.Length).ToArray();
-            weightSum += padding;
-            float[] pdf = weights.Select(w => w / weightSum).ToArray();
-            float[] cdf = new float[pdf.Length + 1];
-            cdf[0] = 0f;
-            for (int i = 1; i < cdf.Length - 1; i++)
+
+            float padding = MathF.Max(0f, eps - weightSum);
+            if (padding > 0f)
             {
-                cdf[i] = Math.Min(1, cdf[i - 1] + pdf[i - 1]);
-            }
-            cdf[^1] = 1f;
-            float[] u;
-            if (randomized)
-            {
-                float s = 1f / numSamples;
-                u = new float[numSamples];
-                for (int i = 0; i < numSamples; i++)
-                {
-                    u[i] = i * s + (float)random.NextDouble() * s;
-                    u[i] = Math.Min(u[i], 1f - float.Epsilon);
-                }
-            }
-            else
-            {
-                u = Enumerable.Range(0, numSamples)
-                    .Select(i => i * (1f - float.Epsilon) / (numSamples - 1))
-                    .ToArray();
+                float paddingPerBin = padding / numBins;
+                weights = weights.Select(w => w + paddingPerBin).ToArray();
+                weightSum += padding;
             }
 
-            // Find intervals
-            float[] samples = new float[numSamples];
+            // Step 2: Compute PDF
+            float[] pdf = weights.Select(w => w / weightSum).ToArray();
+
+            // Step 3: Compute CDF
+            float[] cdfPartialSums = pdf.Take(numBins - 1).ToArray(); // pdf[..., :-1]
+            float[] cdfCumulative = new float[numBins - 1];
+            float cumulativeSum = 0f;
+            for (int i = 0; i < cdfPartialSums.Length; i++)
+            {
+                cumulativeSum += cdfPartialSums[i];
+                cdfCumulative[i] = MathF.Min(1f, cumulativeSum);
+            }
+
+            // Concatenate zeros at the start and ones at the end
+            float[] cdf = new float[numBins + 1];
+            cdf[0] = 0f;
+            Array.Copy(cdfCumulative, 0, cdf, 1, cdfCumulative.Length);
+            cdf[numBins] = 1f;
+
+            // Step 4: Draw uniform samples
+            float[] u = new float[numSamples];
+            float s1 = 1f / numSamples;
             for (int i = 0; i < numSamples; i++)
             {
-                bool[] mask = cdf.Select(c => u[i] >= c).ToArray();
-                (float cdf0, float cdf1) = FindInterval(cdf);
-                (float bin0, float bin1) = FindInterval(bins);
+                u[i] = MathF.Min(i * s1 + (rand.NextSingle() * (s1 - 1e-7f)), 1f - 1e-7f);
+            }
 
-                float t = (u[i] - cdf0) / (cdf1 - cdf0);
-                t = Math.Max(0, Math.Min(1, t)); // Clip t to [0, 1]
-                samples[i] = bin0 + t * (bin1 - bin0);
-                continue;
-
-                (float x0, float x1) FindInterval(float[] x)
+            // Step 5: Identify intervals and compute samples
+            float[] samples = new float[numSamples];
+            for (int s = 0; s < numSamples; s++)
+            {
+                // Find the interval index where u[s] falls into
+                int idx = Array.BinarySearch(cdf, u[s]);
+                if (idx < 0)
                 {
-                    float x0 = x.Where((val, index) => mask[index]).Max();
-                    float x1 = x.Where((val, index) => !mask[index]).Min();
-                    return (x0, x1);
+                    idx = ~idx - 1; // Get the index of the lower bound
                 }
+                idx = Math.Clamp(idx, 0, numBins - 1);
+
+                // Get corresponding tVals and cdf values
+                float binsG0 = tVals[idx];
+                float binsG1 = tVals[idx + 1];
+                float cdfG0 = cdf[idx];
+                float cdfG1 = cdf[idx + 1];
+
+                // Compute the sample using linear interpolation
+                float denom = cdfG1 - cdfG0;
+
+                // Handle potential division by zero (equivalent to jnp.nan_to_num)
+                float t = denom > 0f ? (u[s] - cdfG0) / denom : 0f;
+
+                t = Math.Clamp(t, 0f, 1f);
+                samples[s] = binsG0 + t * (binsG1 - binsG0);
             }
 
             return samples;
