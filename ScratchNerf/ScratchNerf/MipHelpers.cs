@@ -513,71 +513,98 @@ namespace ScratchNerf
             if (whiteBackground) compRgb += new Vector3(1f - acc);
             return (compRgb, distance, acc, alpha, transmittance, weights);
         }
-        
-        public static (Vector3 color, float density)[] VolumetricRenderingGradient(Vector3 compositeRgbGradient, float returnedDistance, float returnedAccumulation, float[] returnedAlpha, float[] returnedTransmittance, float[] returnedWeights, float[] tVals, Vector3 direction, bool whiteBackground)
+
+        public static (Vector3 colorGradient, float densityGradient)[] VolumetricRenderingGradient(
+            Vector3 compositeRgbGradient,
+            float[] returnedAlpha,
+            float[] returnedTransmittance,
+            float[] returnedWeights,
+            (Vector3 color, float density)[] samples,
+            float[] tVals,
+            Vector3 direction,
+            bool whiteBackground)
         {
-            int numSamples = returnedAlpha.Length + 1;
-            (Vector3 color, float density)[] gradients = new (Vector3 color, float density)[numSamples];
-            // Gradient of the background term
+            int numSamples = samples.Length;
+            Vector3[] colorGradients = new Vector3[numSamples];
+            float[] densityGradients = new float[numSamples];
+            float[] dLdWeights = new float[numSamples - 1];
+
+            // Compute gradients with respect to weights and colors
+            for (int i = 0; i < numSamples - 1; i++)
+            {
+                // dL/dWeights[i] = compositeRgbGradient ⋅ color[i]
+                dLdWeights[i] = Vector3.Dot(compositeRgbGradient, samples[i].color);
+
+                // dL/dColor[i] = compositeRgbGradient * weights[i]
+                colorGradients[i] += compositeRgbGradient * returnedWeights[i];
+            }
+
+            // Handle white background case
             if (whiteBackground)
             {
-                Vector3 dcompRgb_dacc = -compositeRgbGradient;
-                float dacc_dweight = 1f;
+                // dL/dAcc = - (dL/dCompRgb ⋅ 1)
+                float dLdAcc = -(compositeRgbGradient.X + compositeRgbGradient.Y + compositeRgbGradient.Z);
+
+                // dL/dWeights[i] += dL/dAcc (since acc = sum(weights))
                 for (int i = 0; i < numSamples - 1; i++)
                 {
-                    Vector3 dcompRgb_dcolor = dcompRgb_dacc * dacc_dweight;
-                    gradients[i].color -= dcompRgb_dcolor;
+                    dLdWeights[i] += dLdAcc;
                 }
             }
-            // Backpropagate through the main loop
+
+            // Initialize gradients with respect to transmittance and alpha
+            float[] dLdTransmittance = new float[numSamples];
+            float[] dLdAlpha = new float[numSamples - 1];
+
+            // Initialize dLdTransmittance to zero
+            for (int i = 0; i < numSamples; i++)
+            {
+                dLdTransmittance[i] = 0f;
+            }
+
+            // Backpropagate through weights
+            for (int i = 0; i < numSamples - 1; i++)
+            {
+                // weights[i] = alpha[i] * transmittance[i]
+                dLdAlpha[i] += dLdWeights[i] * returnedTransmittance[i];
+                dLdTransmittance[i] += dLdWeights[i] * returnedAlpha[i];
+            }
+
+            // Backpropagate through transmittance recursively
             for (int i = numSamples - 2; i >= 0; i--)
             {
-                // Gradient of compRgb += weights[i] * samples[i].color;
-                Vector3 dcompRgb_dcolor = compositeRgbGradient * returnedWeights[i];
-                gradients[i].color += dcompRgb_dcolor;
+                // transmittance[i + 1] = transmittance[i] * (1 - alpha[i])
+                dLdTransmittance[i] += dLdTransmittance[i + 1] * (1 - returnedAlpha[i]);
+                dLdAlpha[i] += -dLdTransmittance[i + 1] * returnedTransmittance[i];
+            }
 
-                // Gradient of weights[i] = alpha[i] * transmittance[i];
-                Vector3 dcompRgb_dweight = compositeRgbGradient * gradients[i].color;
-                float dweight_dalpha = returnedTransmittance[i];
-                float dweight_dtransmittance = returnedAlpha[i];
+            // Compute gradient with respect to density
+            float directionLength = direction.Length();
 
-                Vector3 dalpha_dcompRgb = dcompRgb_dweight * dweight_dalpha;
-                Vector3 dtransmittance_dcompRgb = dcompRgb_dweight * dweight_dtransmittance;
+            for (int i = 0; i < numSamples - 1; i++)
+            {
+                float deltaT = tVals[i + 1] - tVals[i];
+                float s = samples[i].density * deltaT * directionLength;
 
-                float alphaGradient = Vector3.Dot(dalpha_dcompRgb, Vector3.One);
-                float transmittanceGradient = Vector3.Dot(dtransmittance_dcompRgb, Vector3.One);
+                // Compute exp(-s)
+                float expNegS = 1 - returnedAlpha[i]; // Since returnedAlpha[i] = 1 - exp(-s)
 
-                // Backpropagate transmittance
-                float dalpha_ddensity;
-                for (int j = i; j >= 0; j--)
-                {
-                    if (j < i)
-                    {
-                        float dtransmittance_dtransmittancePrev = 1 - returnedAlpha[j];
-                        transmittanceGradient *= dtransmittance_dtransmittancePrev;
-                    }
-                    float dtransmittance_dalpha = -transmittanceGradient / (1 - returnedAlpha[j] + float.Epsilon);
-                    dalpha_ddensity = returnedAlpha[j] * (1 - returnedAlpha[j]);
-                    gradients[j].density -= dtransmittance_dalpha * dalpha_ddensity;
-                }
+                // Compute dAlpha/dDensity
+                float dalphaDdensity = expNegS * deltaT * directionLength;
 
-                // Gradient of alpha[i] = 1 - exp(-samples[i].density * (tVals[i + 1] - tVals[i]) * direction.Length());
-                float deltaT = (tVals[i + 1] - tVals[i]) * direction.Length();
-                dalpha_ddensity = deltaT * MathF.Exp(-gradients[i].density * deltaT);
-                float ddensity_dalpha = alphaGradient * dalpha_ddensity;
-                gradients[i].density += ddensity_dalpha;
+                // Compute dL/dDensity[i] = dL/dAlpha[i] * dAlpha/dDensity
+                densityGradients[i] += dLdAlpha[i] * dalphaDdensity;
+            }
 
-                // Gradient of acc += weights[i]
-                float dacc_dweight = 1f;
-                float dweight_ddensity = -deltaT * returnedTransmittance[i] * MathF.Exp(-gradients[i].density * deltaT);
-                float ddensity_dacc = dacc_dweight * dweight_ddensity;
-                gradients[i].density += ddensity_dacc;
+            // The last sample does not contribute to the output gradients
+            colorGradients[numSamples - 1] = Vector3.Zero;
+            densityGradients[numSamples - 1] = 0f;
 
-                // Gradient of weightedDistanceSum += weights[i] * (tVals[i] + tVals[i + 1]) / 2
-                float midpoint = (tVals[i] + tVals[i + 1]) / 2;
-                float dweightedSum_dweight = midpoint;
-                float ddensity_dweightedSum = dweightedSum_dweight * dweight_ddensity;
-                gradients[i].density += ddensity_dweightedSum;
+            // Combine gradients into output array
+            (Vector3 colorGradient, float densityGradient)[] gradients = new (Vector3 colorGradient, float densityGradient)[numSamples];
+            for (int i = 0; i < numSamples; i++)
+            {
+                gradients[i] = (colorGradients[i], densityGradients[i]);
             }
 
             return gradients;

@@ -120,10 +120,12 @@
     <None Include="accelerated_functions.cu" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="AcceleratedAdamOptimizer.h" />
     <ClInclude Include="AcceleratedMipNeRF.h" />
     <ClInclude Include="AcceleratedMLP.h" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="AcceleratedAdamOptimizer.cpp" />
     <ClCompile Include="AcceleratedMipNeRF.cpp" />
     <ClCompile Include="AcceleratedMLP.cpp" />
   </ItemGroup>

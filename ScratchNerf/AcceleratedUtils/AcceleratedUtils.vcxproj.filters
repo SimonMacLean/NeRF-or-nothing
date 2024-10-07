@@ -6,9 +6,11 @@
   <ItemGroup>
     <ClInclude Include="AcceleratedMipNeRF.h" />
     <ClInclude Include="AcceleratedMLP.h" />
+    <ClInclude Include="AcceleratedAdamOptimizer.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AcceleratedMipNeRF.cpp" />
     <ClCompile Include="AcceleratedMLP.cpp" />
+    <ClCompile Include="AcceleratedAdamOptimizer.cpp" />
   </ItemGroup>
 </Project>

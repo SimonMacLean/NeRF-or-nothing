@@ -4,6 +4,7 @@
 #include <curand_kernel.h>
 using namespace ScratchNerf;
 extern __device__ float atomicAdd(float* address, float val);
+extern __device__ float rsqrtf(float x);
 __device__ float relu(const float x) {
 	return (x > 0) * x;
 }
@@ -229,7 +230,7 @@ __global__ void encode_input_data(const float3* location_means, const float3* lo
 	encoded_location_data[((ray_idx * num_samples + sample_idx) * num_frequencies + frequency_idx) * 6 + 5] = ExpectedCosMean(x.z, yVar.z);
 	if(frequency_idx >= deg_frequencies)
 		return;
-	const int resultNumCols = deg_frequencies * 2 + 1;
+	constexpr int resultNumCols = deg_frequencies * 2 + 1;
 	const float3 xDir = direction_data[ray_idx * num_samples + sample_idx];
 	encoded_direction_data[((ray_idx * num_samples + sample_idx) * resultNumCols + (frequency_idx + 1)) * 3] = sinf(xDir.x);
 	encoded_direction_data[((ray_idx * num_samples + sample_idx) * resultNumCols + (frequency_idx + 1)) * 3 + 1] = sinf(xDir.y);
@@ -363,4 +364,59 @@ __global__ void volumetric_rendering(const float4* samples, const float* tVals, 
 	rgb[ray_idx] = compRgb;
 	distance[ray_idx] = distanceVal;
 	acc[ray_idx] = accVal;
+}
+__global__ void adam_optimizer_step(float* variables, const float* gradients, float* m, float* v, float learning_rate, float beta1, float beta2, float inv_1_minus_beta1_pow, float inv_1_minus_beta2_pow, int size)
+{
+	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (idx >= size)
+		return;
+	float gradient = gradients[idx];
+	float m_idx= beta1 * m[idx] + (1 - beta1) * gradient;
+	float v_idx = beta2 * v[idx] + (1 - beta2) * gradient * gradient;
+	m[idx] = m_idx;
+	v[idx] = v_idx;
+	float mHat = m_idx * inv_1_minus_beta1_pow;
+	float vHat = v_idx * inv_1_minus_beta2_pow;
+	variables[idx] -= learning_rate * mHat * rsqrtf(vHat + 1e-8f);
+}
+__global__ void volumetric_rendering_gradient(const float3* comp_rgb_grad, float* alpha, float* transmittance, float* weights, float3* color_samples, float* t_vals, float3* directions, float3* color_grad, float* density_grad, int num_rays)
+{
+	const int ray_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	if (ray_idx >= num_rays)
+		return;
+	float3 compositeRgbGradient = comp_rgb_grad[ray_idx];
+	float dLdWeights[num_samples - 1];
+	// dL/dAcc = - (dL/dCompRgb dot 1)
+	float dLdAcc = -(compositeRgbGradient.x + compositeRgbGradient.y + compositeRgbGradient.z);
+	// Initialize gradients with respect to transmittance and alpha
+	float dLdTransmittance[num_samples];
+	float dLdAlpha[num_samples - 1];
+	// Compute gradients with respect to weights and colors
+	dLdTransmittance[num_samples - 1] = 0;
+	// Compute gradient with respect to density
+	float3 direction = directions[ray_idx];
+	float directionLength = sqrtf(direction.x * direction.x + direction.y * direction.y + direction.z * direction.z);
+	for (int i = num_samples - 2; i >= 0; i--)
+	{
+		float3 sampleColor = color_samples[ray_idx * num_samples + i];
+		float returnedTransmittance = transmittance[ray_idx * num_samples + i];
+		float returnedAlpha = alpha[ray_idx * num_samples + i];
+		// dL/dWeights[i] = compositeRgbGradient dot color[i]
+		dLdWeights[i] = compositeRgbGradient.x * sampleColor.x + compositeRgbGradient.y * sampleColor.y + compositeRgbGradient.z * sampleColor.z + dLdAcc;
+		float returnedWeight = weights[ray_idx * num_samples + i];
+		// dL/dColor[i] = compositeRgbGradient * weights[i]
+		color_grad[ray_idx * num_samples + i] = make_float3(compositeRgbGradient.x * returnedWeight, compositeRgbGradient.y * returnedWeight, compositeRgbGradient.z * returnedWeight);
+		// weights[i] = alpha[i] * transmittance[i]
+		dLdAlpha[i] = dLdWeights[i] * returnedTransmittance - dLdTransmittance[i + 1] * returnedTransmittance;
+		dLdTransmittance[i] = dLdWeights[i] * returnedAlpha + dLdTransmittance[i + 1] * (1 - returnedAlpha);
+		float t0 = t_vals[ray_idx * (num_samples + 1) + i];
+		float t1 = t_vals[ray_idx * (num_samples + 1) + i + 1];
+		float deltaT = t1 - t0;
+		// Compute exp(-s)
+		float expNegS = 1 - alpha[ray_idx * num_samples + i]; // Since alpha[i] = 1 - exp(-s)
+		// Compute dAlpha/dDensity
+		float d_alpha_d_density = expNegS * deltaT * directionLength;
+		// Compute dL/dDensity[i] = dL/dAlpha[i] * dAlpha/dDensity
+		density_grad[ray_idx * num_samples + i] = dLdAlpha[i] * d_alpha_d_density;
+	}
 }

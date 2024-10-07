@@ -64,7 +64,7 @@ namespace ScratchNerf
                         Ray r = rays[i];
                         (float[] tVals, (Vector3 mean, Matrix3x3 covariance)[] samples) prevRes = res[i];
                         res[i] = MipHelpers.ResampleAlongRay(rng, r.Origin, r.Direction, r.Radius, prevRes.tVals,
-                            weights, randomized, RayShape, StopLevelGrad, ResamplePadding);
+                            weights, randomized, RayShape, ResamplePadding);
                     }
                 }
                 Vector3[,][] samplesEnc = new Vector3[numRays, NumSamples + 1 - iLevel][];

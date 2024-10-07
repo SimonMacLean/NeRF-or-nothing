@@ -109,56 +109,51 @@ void backpropagate_layer_partial_conjoined(float* inputs_a, float* inputs_b, flo
     dim3 grid_size = divup(dim3(num_neurons, ray_num, sample_num), block_size);
     cudaLaunchKernel((void*)backpropagate_neuron_partial_conjoined, grid_size, block_size, bnpc_args);
 }
+void accelerated_mlp::do_malloc_step(int num_neurons, int num_neurons_prev, int index)
+{
+	cudaMalloc(weights_ + index, num_neurons * num_neurons_prev * sizeof(float));
+	cudaMalloc(biases_ + index, num_neurons * sizeof(float));
+	cudaMalloc(outputs_ + index, num_neurons * sizeof(float));
+	cudaMalloc(weighted_sums_ + index, num_neurons * sizeof(float));
+	cudaMalloc(input_grads_ + index, num_neurons_prev * sizeof(float));
+	cudaMalloc(weight_grads_ + index, num_neurons * num_neurons_prev * sizeof(float));
+	cudaMalloc(bias_grads_ + index, num_neurons * sizeof(float));
+}
+void accelerated_mlp::do_malloc_conjoined(int num_neurons, int num_neurons_prev, int additional_inputs, int index)
+{
+	cudaMalloc(weights_ + index, num_neurons * (num_neurons_prev + additional_inputs) * sizeof(float));
+	cudaMalloc(biases_ + index, num_neurons * sizeof(float));
+	cudaMalloc(outputs_ + index, num_neurons * sizeof(float));
+	cudaMalloc(weighted_sums_ + index, num_neurons * sizeof(float));
+	cudaMalloc(input_grads_ + index, num_neurons_prev * sizeof(float));
+	cudaMalloc(weight_grads_ + index, num_neurons * (num_neurons_prev + additional_inputs) * sizeof(float));
+	cudaMalloc(bias_grads_ + index, num_neurons * sizeof(float));
+}
 accelerated_mlp::accelerated_mlp(int deg_point, int deg_view)
 {
     int max_size = 0;
     location_encodings = 2 * deg_point;
     direction_encodings = 2 * deg_view + 1;
-    cudaMalloc(weights_, net_width * location_dimension * location_encodings * sizeof(float));
-    cudaMalloc(biases_, net_width * sizeof(float));
-    cudaMalloc(outputs_, net_width * sizeof(float));
-    cudaMalloc(weighted_sums_, net_width * sizeof(float));
-    cudaMalloc(input_grads_, location_dimension * location_encodings * sizeof(float));
-    cudaMalloc(weight_grads_, net_width * location_dimension * location_encodings * sizeof(float));
-    cudaMalloc(bias_grads_, net_width * sizeof(float));
+    do_malloc_step(net_width, location_dimension * location_encodings, 0);
     max_size = std::max(max_size, net_width * location_dimension * location_encodings);
     for (int i = 1; i < net_depth; i++)
     {
-	    cudaMalloc(weights_ + i, net_width * (i % skip_layer == 0 ? net_width + location_dimension * location_encodings : net_width) * sizeof(float));
-        cudaMalloc(biases_ + i, net_width * sizeof(float));
-        cudaMalloc(outputs_ + i, net_width * sizeof(float));
-        cudaMalloc(weighted_sums_ + i, net_width * sizeof(float));
-        cudaMalloc(input_grads_ + i, net_width * sizeof(float));
-        cudaMalloc(weight_grads_ + i, net_width * (i % skip_layer == 0 ? net_width + location_dimension * location_encodings : net_width) * sizeof(float));
-        cudaMalloc(bias_grads_ + i, net_width * sizeof(float));
+        if (i % skip_layer == 0)
+			do_malloc_conjoined(net_width, net_width, location_dimension * location_encodings, i);
+		else
+			do_malloc_step(net_width, net_width, i);
         max_size = std::max(max_size, net_width * (i % skip_layer == 0 ? net_width + location_dimension * location_encodings : net_width));
     }
-    cudaMalloc(weights_ + net_depth, net_width * num_density_channels * sizeof(float));
-    cudaMalloc(biases_ + net_depth, net_width * sizeof(float));
-    cudaMalloc(outputs_ + net_depth, num_density_channels * sizeof(float));
-	cudaMalloc(weighted_sums_ + net_depth, num_density_channels * sizeof(float));
-    cudaMalloc(input_grads_ + net_depth, net_width * sizeof(float));
-    cudaMalloc(weight_grads_ + net_depth, net_width * num_density_channels * sizeof(float));
-    cudaMalloc(bias_grads_ + net_depth, net_width * sizeof(float));
+    do_malloc_step(num_density_channels, net_width, net_depth);
     max_size = std::max(max_size, net_width * num_density_channels);
-    cudaMalloc(weights_ + net_depth + 1, net_width_condition * (net_width + direction_dimension * direction_encodings) * sizeof(float));
-    cudaMalloc(biases_ + net_depth + 1, net_width_condition * sizeof(float));
-    cudaMalloc(outputs_ + net_depth + 1, net_width_condition * sizeof(float));
-	cudaMalloc(weighted_sums_ + net_depth + 1, net_width_condition * sizeof(float));
-    cudaMalloc(weight_grads_ + net_depth + 1, net_width_condition * (net_width + direction_dimension * direction_encodings) * sizeof(float));
-    cudaMalloc(bias_grads_ + net_depth + 1, net_width_condition * sizeof(float));
+    do_malloc_conjoined(net_width_condition, net_width, direction_dimension * direction_encodings,net_depth + 1);
     max_size = std::max(max_size, net_width_condition * (net_width + direction_dimension * direction_encodings));
     for (int i = 1; i < net_depth_condition; i++)
     {
-	    cudaMalloc(weights_ + net_depth + 1 + i, net_width_condition * net_width_condition * sizeof(float));
-        cudaMalloc(biases_ + net_depth + 1 + i, net_width_condition * sizeof(float));
-        cudaMalloc(outputs_ + net_depth + 1 + i, net_width_condition * sizeof(float));
-	    cudaMalloc(weighted_sums_ + net_depth + 1 + i, net_width_condition * sizeof(float));
-        cudaMalloc(input_grads_ + net_depth + 1 + i, net_width_condition * sizeof(float));
-        cudaMalloc(weight_grads_ + net_depth + 1 + i, net_width_condition * net_width_condition * sizeof(float));
-        cudaMalloc(bias_grads_ + net_depth + 1 + i, net_width_condition * sizeof(float));
+        do_malloc_step(net_width_condition, net_width_condition, net_depth + 1 + i);
         max_size = std::max(max_size, net_width_condition * net_width_condition);
     }
+    do_malloc_step(num_rgb_channels, net_width_condition, net_depth + 1 + net_depth_condition);
     cudaMalloc(weights_ + net_depth + 1 + net_depth_condition, num_rgb_channels * net_width_condition * sizeof(float));
     cudaMalloc(biases_ + net_depth + 1 + net_depth_condition, num_rgb_channels * sizeof(float));
     cudaMalloc(outputs_ + net_depth + 1 + net_depth_condition, num_rgb_channels * sizeof(float));
@@ -181,6 +176,11 @@ accelerated_mlp::accelerated_mlp(int deg_point, int deg_view)
 	    initialize_weights(states_, weights_[net_depth + 1 + i], biases_[net_depth + 1 + i], net_width_condition, net_width_condition);
     initialize_weights(states_, weights_[net_depth + 1 + net_depth_condition], biases_[net_depth + 1 + net_depth_condition], num_rgb_channels, net_width_condition);
     cudaDeviceSynchronize();
+    for(int i = 0; i < net_depth + net_depth_condition + 2; i++)
+	{
+        allParams[i] = weights_[i];
+        allParams[i + net_depth + net_depth_condition + 2] = biases_[i];
+	}
 }
 
 std::pair<float*, float*> accelerated_mlp::get_output(float* dev_encoded_position, float* dev_encoded_direction)
@@ -210,7 +210,7 @@ std::pair<float*, float*> accelerated_mlp::get_output(float* dev_encoded_positio
     return std::make_pair(outputs_[net_depth], outputs_[net_depth + 1 + net_depth_condition]);
 }
 
-std::pair<float*[11], float*[11]> accelerated_mlp::get_gradient(float* color_gradient, float* density_gradient)
+float** accelerated_mlp::get_gradient(float* color_gradient, float* density_gradient)
 {
     backpropagate_sigmoid_layer(outputs_[net_depth + net_depth_condition],
                                 weights_[net_depth + 1 + net_depth_condition],
@@ -246,5 +246,10 @@ std::pair<float*[11], float*[11]> accelerated_mlp::get_gradient(float* color_gra
     }
     backpropagate_layer(encoded_position, weights_[0], weighted_sums_[0], input_grads_[1], input_grads_[0],
                         weight_grads_[0], bias_grads_[0], net_width, location_dimension * location_encodings);
-    return std::make_pair(weight_grads_, bias_grads_);
+    for (int i = 0; i < net_depth + net_depth_condition + 2; i++)
+    {
+        allGradients[i] = weight_grads_[i];
+        allGradients[i + net_depth + net_depth_condition + 2] = bias_grads_[i];
+    }
+    return &allGradients[0];
 }
