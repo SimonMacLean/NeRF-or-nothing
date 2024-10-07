@@ -14,7 +14,11 @@ __device__ float sigmoid(const float x) {
 	return 1 / (1 + expf(-x));
 }
 __device__ float sigmoid_derivative(const float x) {
-	return x * (1 - x);
+	const float sigmoid = 1 / (1 + expf(-x));
+	return sigmoid * (1 - sigmoid);
+}
+__device__ float soft_plus(const float x) {
+	return logf(1 + expf(x));
 }
 constexpr int num_samples = 128;
 constexpr int num_rays = 4096;
@@ -23,7 +27,7 @@ __global__ void initialize_curand(curandState* states, const unsigned long long 
 	const int idx = blockIdx.x * blockDim.x + threadIdx.x;
 	if (idx >= size)
 		return;
-	curand_init(seed, idx, 0, &states[idx]);
+	curand_init(seed, idx, 0, states + idx);
 }
 __global__ void initialize_glorot(const curandState* states, float* weights, float* biases, const int num_neurons, const int input_size)
 {
@@ -50,7 +54,7 @@ __global__ void get_neuron_output(const float* inputs, const float* weights, con
 	weighted_sums[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = weighted_sum;
 	outputs[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = relu(weighted_sum);
 }
-__global__ void get_neuron_output_no_relu(const float* inputs, const float* weights, const float* biases, float* outputs, float* weighted_sums, const int num_neurons, const int input_size) {
+__global__ void get_neuron_output_sigmoid(const float* inputs, const float* weights, const float* biases, float* outputs, float* weighted_sums, const int num_neurons, const int input_size) {
 	const int neuron_idx = blockIdx.x * blockDim.x + threadIdx.x;
 	const int ray_idx = blockIdx.y * blockDim.y + threadIdx.y;
 	const int sample_idx = blockIdx.z * blockDim.z + threadIdx.z;
@@ -61,7 +65,20 @@ __global__ void get_neuron_output_no_relu(const float* inputs, const float* weig
 		weighted_sum += inputs[ray_idx * input_size * num_samples + sample_idx * input_size + i] * weights[neuron_idx * input_size + i];
 	weighted_sum += biases[neuron_idx];
 	weighted_sums[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = weighted_sum;
-	outputs[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = weighted_sum;
+	outputs[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = sigmoid(weighted_sum);
+}
+__global__ void get_neuron_output_soft_plus(const float* inputs, const float* weights, const float* biases, float* outputs, float* weighted_sums, const int num_neurons, const int input_size) {
+	const int neuron_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const int ray_idx = blockIdx.y * blockDim.y + threadIdx.y;
+	const int sample_idx = blockIdx.z * blockDim.z + threadIdx.z;
+	if (neuron_idx >= num_neurons || ray_idx >= num_rays || sample_idx >= num_samples)
+		return;
+	float weighted_sum = 0.f;
+	for (int i = 0; i < input_size; i++)
+		weighted_sum += inputs[ray_idx * input_size * num_samples + sample_idx * input_size + i] * weights[neuron_idx * input_size + i];
+	weighted_sum += biases[neuron_idx];
+	weighted_sums[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = weighted_sum;
+	outputs[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx] = soft_plus(weighted_sum);
 }
 __global__ void get_neuron_output_conjoined_inputs(const float* inputs_a, const float* inputs_b, const float* weights, const float* biases, float* outputs, float* weighted_sums, const int num_neurons, const int input_a_size, const int input_b_size) {
 	const int neuron_idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -102,10 +119,58 @@ __global__ void backpropagate_neuron(const float* inputs, const float* weights,
 	}
 	atomicAdd(&bias_grads[neuron_idx], output_grad * activation_derivative);
 }
-__global__ void backpropagate_neuron_partial(const float* inputs, const float* weights,
+__global__ void backpropagate_neuron_sigmoid(const float* inputs, const float* weights,
 	const float* weighted_sums, const float* output_grads,
 	float* input_grads, float* weight_grads, float* bias_grads,
-	const int num_neurons, const int input_size, const int inputs_to_backpropagate)
+	const int num_neurons, const int input_size) {
+	const int neuron_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const int ray_idx = blockIdx.y * blockDim.y + threadIdx.y;
+	const int sample_idx = blockIdx.z * blockDim.z + threadIdx.z;
+	if (neuron_idx >= num_neurons || ray_idx >= num_rays || sample_idx >= num_samples)
+		return;
+	const float output_grad = output_grads[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx];
+	const float weighted_sum = weighted_sums[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx];
+	const float activation_derivative = sigmoid_derivative(weighted_sum);
+	const int start = (ray_idx * num_samples + sample_idx) % input_size;
+	for (int offset = 0; offset < input_size; offset++) {
+		const int i = (start + offset) % input_size;
+		const float input_val = inputs[ray_idx * input_size * num_samples + sample_idx * input_size + i];
+		const float weight_val = weights[neuron_idx * input_size + i];
+		atomicAdd(&weight_grads[neuron_idx * input_size + i],
+			input_val * output_grad * activation_derivative);
+		atomicAdd(&input_grads[ray_idx * input_size * num_samples + sample_idx * input_size + i],
+			weight_val * output_grad * activation_derivative);
+	}
+	atomicAdd(&bias_grads[neuron_idx], output_grad * activation_derivative);
+}
+__global__ void backpropagate_neuron_soft_plus(const float* inputs, const float* weights,
+	const float* weighted_sums, const float* output_grads,
+	float* input_grads, float* weight_grads, float* bias_grads,
+	const int num_neurons, const int input_size) {
+	const int neuron_idx = blockIdx.x * blockDim.x + threadIdx.x;
+	const int ray_idx = blockIdx.y * blockDim.y + threadIdx.y;
+	const int sample_idx = blockIdx.z * blockDim.z + threadIdx.z;
+	if (neuron_idx >= num_neurons || ray_idx >= num_rays || sample_idx >= num_samples)
+		return;
+	const float output_grad = output_grads[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx];
+	const float weighted_sum = weighted_sums[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx];
+	const float activation_derivative = sigmoid(weighted_sum);
+	const int start = (ray_idx * num_samples + sample_idx) % input_size;
+	for (int offset = 0; offset < input_size; offset++) {
+		const int i = (start + offset) % input_size;
+		const float input_val = inputs[ray_idx * input_size * num_samples + sample_idx * input_size + i];
+		const float weight_val = weights[neuron_idx * input_size + i];
+		atomicAdd(&weight_grads[neuron_idx * input_size + i],
+			input_val * output_grad * activation_derivative);
+		atomicAdd(&input_grads[ray_idx * input_size * num_samples + sample_idx * input_size + i],
+			weight_val * output_grad * activation_derivative);
+	}
+	atomicAdd(&bias_grads[neuron_idx], output_grad * activation_derivative);
+}
+__global__ void backpropagate_neuron_partial_conjoined(const float* inputs_a, const float* inputs_b, const float* weights,
+	const float* weighted_sums, const float* output_grads,
+	float* input_a_grads, float* weight_grads, float* bias_grads,
+	const int num_neurons, const int input_a_size, const int input_b_size)
 {
 	const int neuron_idx = blockIdx.x * blockDim.x + threadIdx.x;
 	const int ray_idx = blockIdx.y * blockDim.y + threadIdx.y;
@@ -115,16 +180,22 @@ __global__ void backpropagate_neuron_partial(const float* inputs, const float* w
 	const float output_grad = output_grads[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx];
 	const float weighted_sum = weighted_sums[ray_idx * num_neurons * num_samples + sample_idx * num_neurons + neuron_idx];
 	const float activation_derivative = relu_derivative(weighted_sum);
-	const int start = (ray_idx * num_samples + sample_idx) % input_size;
-	for (int offset = 0; offset < input_size; offset++) {
-		const int i = (start + offset) % input_size;
-		const float input_val = inputs[ray_idx * input_size * num_samples + sample_idx * input_size + i];
-		const float weight_val = weights[neuron_idx * input_size + i];
-		atomicAdd(&weight_grads[neuron_idx * input_size + i],
+	const int start = ray_idx * num_samples + sample_idx;
+	for (int offset = 0; offset < input_a_size; offset++) {
+		const int i = (start + offset) % input_a_size;
+		const float input_val = inputs_a[ray_idx * input_a_size * num_samples + sample_idx * input_a_size + i];
+		const float weight_val = weights[neuron_idx * (input_a_size + input_b_size) + i];
+		atomicAdd(&weight_grads[neuron_idx * (input_a_size + input_b_size) + i],
 			input_val * output_grad * activation_derivative);
-		if(i < inputs_to_backpropagate)
-			atomicAdd(&input_grads[ray_idx * input_size * num_samples + sample_idx * input_size + i],
+		atomicAdd(&input_a_grads[ray_idx * input_a_size * num_samples + sample_idx * input_a_size + i],
 				weight_val * output_grad * activation_derivative);
+	}
+	for (int offset = 0; offset < input_b_size; offset++) {
+		const int i = (start + offset) % input_b_size;
+		const float input_val = inputs_b[ray_idx * input_b_size * num_samples + sample_idx * input_b_size + i];
+		const float weight_val = weights[neuron_idx * (input_a_size + input_b_size) + i + input_a_size];
+		atomicAdd(&weight_grads[neuron_idx * (input_a_size + input_b_size) + i + input_a_size],
+			input_val * output_grad * activation_derivative);
 	}
 	atomicAdd(&bias_grads[neuron_idx], output_grad * activation_derivative);
 }

@@ -8,7 +8,7 @@ ref class accelerated_mlp sealed
 public:
     accelerated_mlp(int deg_point, int deg_view);
 	std::pair<float*, float*> get_output(float* encoded_position, float* encoded_direction);
-    float* get_gradient(float* color_gradient, float* density_gradient);
+    std::pair<float* [11], float* [11]> get_gradient(float* color_gradient, float* density_gradient);
 private:
     static constexpr int net_depth = 8;          // The depth of the first part of MLP.
     static constexpr int net_width = 256;        // The width of the first part of MLP.
@@ -25,6 +25,11 @@ private:
     float* biases_[net_depth + net_depth_condition + 2];
     float* outputs_[net_depth + net_depth_condition + 2];
     float* weighted_sums_[net_depth + net_depth_condition + 2];
+    float* encoded_position;
+    float* encoded_direction;
+    float* input_grads_[net_depth + net_depth_condition + 2];
+    float* weight_grads_[net_depth + net_depth_condition + 2];
+    float* bias_grads_[net_depth + net_depth_condition + 2];
     curandState* states_;
 };
 
