@@ -109,8 +109,11 @@
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies />
+      <AdditionalDependencies>cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <CudaCompile>
+      <GPUDebugInfo>false</GPUDebugInfo>
+    </CudaCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="AcceleratedAdamOptimizer.h" />
@@ -118,6 +121,7 @@
     <ClInclude Include="AcceleratedMipNeRF.h" />
     <ClInclude Include="AcceleratedMLP.h" />
     <ClInclude Include="helpers.h" />
+    <ClInclude Include="OutputRetriever.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AcceleratedAdamOptimizer.cpp" />
@@ -125,6 +129,7 @@
     <ClCompile Include="AcceleratedMipNeRF.cpp" />
     <ClCompile Include="AcceleratedMLP.cpp" />
     <ClCompile Include="helpers.cpp" />
+    <ClCompile Include="OutputRetriever.cpp" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="accelerated_functions.cu" />

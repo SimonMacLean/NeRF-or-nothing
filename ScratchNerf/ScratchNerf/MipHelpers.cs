@@ -146,7 +146,7 @@ namespace ScratchNerf
     public struct MatrixNxN(int dimension)
     {
         public int Dimension = dimension;
-        float[,] Values = new float[dimension, dimension];
+        private float[,] Values = new float[dimension, dimension];
         private MatrixNxN transpose => Transpose(this);
         public float this[int i, int j]
         {
@@ -668,7 +668,7 @@ namespace ScratchNerf
 
     public static class MathHelpers
     {
-        const float Ln10 = 2.3025850929940456840179914546844f;
+        private const float Ln10 = 2.3025850929940456840179914546844f;
         public static float MseToPsnr(float mse) => -10.0f / Ln10 * MathF.Log(mse);
         public static float NextGaussian(this Random random) => MathF.Sqrt(-2.0f * MathF.Log(random.NextSingle())) * MathF.Sin(2.0f * MathF.PI * random.NextSingle());
         public static float PsnrToMse(float psnr) => MathF.Exp(-0.1f * Ln10 * psnr);

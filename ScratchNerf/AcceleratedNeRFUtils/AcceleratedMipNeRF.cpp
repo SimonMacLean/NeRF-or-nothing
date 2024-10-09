@@ -1,5 +1,6 @@
 #include "AcceleratedMipNeRF.h"
 
+#include <cstdio>
 #include <ctime>
 namespace AcceleratedNeRFUtils
 {
@@ -26,8 +27,8 @@ namespace AcceleratedNeRFUtils
 			cudaMalloc(get_head_ptr(dev_alpha_) + i, num_rays * num_samples * sizeof(float));
 			cudaMalloc(get_head_ptr(dev_output_rgb_) + i, num_rays * sizeof(float3));
 			cudaMalloc(get_head_ptr(dev_output_density_) + i, num_rays * sizeof(float));
-			cudaMalloc(get_head_ptr(dev_encoded_position_data_) + i, num_rays * num_samples * num_positional_frequencies * 3 * sizeof(float));
-			cudaMalloc(get_head_ptr(dev_encoded_direction_data_) + i, num_rays * num_samples * (num_directional_frequencies + 1) * 3 * sizeof(float));
+			cudaMalloc(get_head_ptr(dev_encoded_position_data_) + i, num_rays * num_samples * num_positional_frequencies * 6 * sizeof(float));
+			cudaMalloc(get_head_ptr(dev_encoded_direction_data_) + i, num_rays * num_samples * (num_directional_frequencies * 2 + 1) * 3 * sizeof(float));
 			cudaMalloc(get_head_ptr(dev_composite_rgb) + i, num_rays * sizeof(float3));
 			cudaMalloc(get_head_ptr(dev_color_grad_) + i, num_rays * num_samples * sizeof(float3));
 			cudaMalloc(get_head_ptr(dev_density_grad_) + i, num_rays * num_samples * sizeof(float));
@@ -44,6 +45,7 @@ namespace AcceleratedNeRFUtils
 		void* ic_args[3] = { &dev_states_ptr, &seed, &size };
 		cudaLaunchKernel((void*)initialize_curand, dim3(size) / block_1d, block_1d, ic_args);
 		cudaDeviceSynchronize();
+
 	}
 
 	array<float*>^ AcceleratedMipNeRF::GetGradient(array<Vector3>^ origins, array<Vector3>^ directions, array<float>^ radii,
@@ -79,8 +81,6 @@ namespace AcceleratedNeRFUtils
 		float* dev_fars = dev_fars_;
 		float* dev_loss_mults = dev_loss_mults_;
 		curandState* dev_states = dev_states_;
-		int ray_num = num_rays;
-		int sample_num = num_samples;
 		for (int iLevel = 0; iLevel < num_levels; iLevel++)
 		{
 			if (iLevel == 0)
@@ -93,35 +93,52 @@ namespace AcceleratedNeRFUtils
 			{
 				void* grtv_args[4] = { &dev_states, get_head_ptr(dev_t_vals_) + iLevel - 1, get_head_ptr(dev_weights_) + iLevel - 1, get_head_ptr(dev_t_vals_) + iLevel };
 				cudaLaunchKernel((void*)get_resampled_t_vals, dim3(num_rays) / block_1d, block_1d, grtv_args);
-				cudaDeviceSynchronize();
+				if (cudaDeviceSynchronize() == cudaSuccess)
+					printf("No error after get_resampled_t_vals\n");
+				else
+					printf("grtv ");
 			}
 			void* cs_args[6] = { get_head_ptr(dev_t_vals_) + iLevel, &dev_origins, &dev_directions, get_head_ptr(dev_means_) + iLevel, get_head_ptr(dev_covs_) + iLevel, &dev_radii };
 			cudaLaunchKernel((void*)cast_rays, dim3(num_rays, num_samples) / block_2d, block_2d, cs_args);
-			cudaDeviceSynchronize();
+			if (cudaDeviceSynchronize() == cudaSuccess)
+				printf("No error after cast_rays\n");
+			else
+				printf("cs ");
 			void* eid_args[5] = { get_head_ptr(dev_means_) + iLevel, get_head_ptr(dev_covs_) + iLevel, &dev_directions, get_head_ptr(dev_encoded_position_data_) + iLevel, get_head_ptr(dev_encoded_direction_data_) + iLevel };
 			cudaLaunchKernel((void*)encode_input_data, dim3(num_rays, num_samples, num_positional_frequencies) / block_3d, block_3d, eid_args);
-			cudaDeviceSynchronize();
+			if (cudaDeviceSynchronize() == cudaSuccess)
+				printf("No error after encode_input_data\n");
+			else
+				printf("eid ");
 			ValueTuple<uint64_t, uint64_t>^ output = mlp->get_output(dev_encoded_position_data_[iLevel], dev_encoded_direction_data_[iLevel], iLevel);
 			dev_output_rgb_[iLevel] = (float3*)output->Item1;
 			dev_output_density_[iLevel] = (float*)output->Item2;
-			void* vr_args[8] = { get_head_ptr(dev_output_rgb_) + iLevel, get_head_ptr(dev_output_density_) + iLevel, get_head_ptr(dev_t_vals_) + iLevel, dev_directions, get_head_ptr(dev_composite_rgb) + iLevel, get_head_ptr(dev_alpha_) + iLevel, get_head_ptr(dev_transmittance_) + iLevel, get_head_ptr(dev_weights_) + iLevel };
+			void* vr_args[8] = { get_head_ptr(dev_output_rgb_) + iLevel, get_head_ptr(dev_output_density_) + iLevel, get_head_ptr(dev_t_vals_) + iLevel, &dev_directions, get_head_ptr(dev_composite_rgb) + iLevel, get_head_ptr(dev_alpha_) + iLevel, get_head_ptr(dev_transmittance_) + iLevel, get_head_ptr(dev_weights_) + iLevel };
 			cudaLaunchKernel((void*)volumetric_rendering, dim3(num_rays) / block_1d, block_1d, vr_args);
-			cudaDeviceSynchronize();
+			if(cudaDeviceSynchronize() == cudaSuccess)
+				printf("No error after volumetric rendering\n");
+			else
+				printf("vr ");
 		}
 		float3* dev_color_gradients[num_levels];
 		for (int i = 0; i < num_levels; i++)
 		{
-			dev_color_gradients[i] = reinterpret_cast<float3*>(getOutputGradient(reinterpret_cast<uint64_t>(dev_composite_rgb[i]), i, lossMultiplierSum, reinterpret_cast<uint64_t>(dev_loss_mults)));
-			void* vrg_args[9] = { dev_color_gradients + i, get_head_ptr(dev_alpha_) + i, get_head_ptr(dev_transmittance_) + i, get_head_ptr(dev_weights_) + i, get_head_ptr(dev_output_rgb_) + i, get_head_ptr(dev_t_vals_) + i, dev_directions + i, get_head_ptr(dev_color_grad_) + i, get_head_ptr(dev_density_grad_) + i };
+			dev_color_gradients[i] = (float3*)getOutputGradient((uint64_t)dev_composite_rgb[i], i, lossMultiplierSum, (uint64_t)dev_loss_mults);
+			void* vrg_args[9] = { dev_color_gradients + i, get_head_ptr(dev_alpha_) + i, get_head_ptr(dev_transmittance_) + i, get_head_ptr(dev_weights_) + i, get_head_ptr(dev_output_rgb_) + i, get_head_ptr(dev_t_vals_) + i, &dev_directions, get_head_ptr(dev_color_grad_) + i, get_head_ptr(dev_density_grad_) + i };
 			cudaLaunchKernel((void*)volumetric_rendering_gradient, dim3(num_rays) / block_1d, block_1d, vrg_args);
+			if (cudaDeviceSynchronize() == cudaSuccess)
+				printf("No error after volumetric rendering gradient\n");
+			else
+				printf("vrg ");
 		}
-		cudaDeviceSynchronize();
-		mlp->reset_gradients(0);
 		for (int i = 0; i < num_levels; i++)
 		{
 			mlp->get_gradient((float*)dev_color_grad_[i], dev_density_grad_[i], i);
+			if (cudaDeviceSynchronize() == cudaSuccess)
+				printf("No error after get_gradient\n");
+			else
+				printf("gg%d ", i);
 		}
-		cudaDeviceSynchronize();
 		return mlp->allGradients;
 	}
 

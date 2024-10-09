@@ -9,7 +9,7 @@ namespace ScratchNerf
         ///  The main entry point for the application.
         /// </summary>
         [STAThread]
-        static void Main()
+        private static void Main()
         {
             // To customize application configuration such as set high DPI settings or default font,
             // see https://aka.ms/applicationconfiguration.
@@ -18,7 +18,7 @@ namespace ScratchNerf
             Train();
         }
 
-        static void Train()
+        private static void Train()
         {
             BinDataset binDataset = new("C:\\Users\\simon\\Desktop\\mipnerf-main\\train_data.bin");
             AcceleratedMipNeRF model = new();
@@ -37,52 +37,33 @@ namespace ScratchNerf
             {
                 (Rays rays, Vector3[] pixels) batch = binDataset.Next();
                 float lr = learningRateFn(step);
-
-                TrainStep(model, optimizer, gradientCalculator, batch, lr);
-
-                if (step % Config.PrintEvery == 0)
-                {
-                    Console.WriteLine($@"Step {step}/{Config.MaxSteps}");
-                }
+                ulong output = TrainStep(model, optimizer, gradientCalculator, batch, lr);
+                if (step % Config.PrintEvery != 0) continue;
+                Vector3[] returnedValues = OutputRetriever.RetrieveOutput(output, BinDataset.BatchSize);
+                float loss = LossFn(returnedValues, batch.rays.LossMults, batch.pixels);
+                Console.WriteLine($@"Step {step}/{Config.MaxSteps}, Loss: {loss}");
             }
         }
 
-        static unsafe void TrainStep(AcceleratedMipNeRF model, AcceleratedAdamOptimizer optimizer, AcceleratedGradientCalculator gradientCalculator, (Rays rays, Vector3[] pixels) batch, float learningRate)
+        private static unsafe ulong TrainStep(AcceleratedMipNeRF model, AcceleratedAdamOptimizer optimizer, AcceleratedGradientCalculator gradientCalculator, (Rays rays, Vector3[] pixels) batch, float learningRate)
         {
+            ulong output = 0;
             float*[] grad = model.GetGradient(batch.rays.Origins, batch.rays.Directions, batch.rays.Radii,
                 batch.rays.Nears, batch.rays.Fars, batch.rays.LossMults,
                 (inputptr, level, lossMultSum, lossMults) =>
-                    gradientCalculator.get_output_gradient(inputptr, batch.pixels, lossMults, lossMultSum, level));
+                {
+                    output = inputptr;
+                    return gradientCalculator.get_output_gradient(inputptr, batch.pixels, lossMults, lossMultSum,
+                        level);
+                });
             float*[] variables = model.mlp.allParams;
             optimizer.step(variables, grad, learningRate);
-        }
-        static (float, StatsUtil) LossFn(MipNerfModel model, Random rng, TrainState state, (Ray[] rays, Vector3[] pixels) batch, float learningRate)
-        {
-            float weightL2 = Config.WeightDecayMult * model.mlp.allParams.Average((z) => z * z);
-            (Vector3 CompositeRgb, float Distance, float Accumulation)[,] ret = model.Call(batch.rays, Config.Randomized, Config.WhiteBkgd);
-            float[] mask = batch.rays.Select((ray) => ray.LossMult).ToArray();
-            if (Config.DisableMultiscaleLoss) mask = mask.Select((x) => 1f).ToArray();
-            float[] losses = new float[model.NumLevels];
-            for (int level = 0; level < model.NumLevels; level++)
-            {
-                float totalLoss = 0;
-                float totalMask = mask.Sum();
-
-                for (int i = 0; i < batch.rays.Length; i++) totalLoss += mask[i] * (ret[level, i].CompositeRgb - batch.pixels[i]).LengthSquared();
-
-                losses[level] = totalLoss / totalMask;
-            }
-            float loss = losses[..^1].Sum() * Config.CoarseLossMult + losses[^1] + weightL2;
-            StatsUtil stats = new()
-            {
-                loss = loss,
-                losses = losses,
-                weightL2 = weightL2,
-            };
-            return (loss, stats);
+            return output;
         }
 
-        static (float, StatsUtil) LossFn((Vector3 CompositeRgb, float Distance, float Accumulation)[,] ret,
+        private static float LossFn(Vector3[] returnedValues, float[] lossMults, Vector3[] wantedValues) => returnedValues.Select((t, i) => lossMults[i] * (t - wantedValues[i]).LengthSquared()).Sum() / lossMults.Sum();
+
+        private static (float, StatsUtil) LossFn((Vector3 CompositeRgb, float Distance, float Accumulation)[,] ret,
             (Ray[] rays, Vector3[] pixels) batch)
         {
                         float[] mask = batch.rays.Select((ray) => ray.LossMult).ToArray();

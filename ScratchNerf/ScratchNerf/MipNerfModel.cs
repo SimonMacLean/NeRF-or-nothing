@@ -27,7 +27,7 @@ namespace ScratchNerf
             return exp / (1 + exp) / (1 + exp);
         };  // The gradient of the RGB activation
 
-        Random rng = new();
+        private Random rng = new();
         public MLP mlp;
 
         public MipNerfModel() => mlp = new(MaxDegPoint - MinDegPoint, DegView);

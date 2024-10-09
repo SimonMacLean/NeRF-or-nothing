@@ -2,7 +2,8 @@
   "profiles": {
     "ScratchNerf": {
       "commandName": "Project",
-      "workingDirectory": "C:\\Users\\simon\\Documents\\data\\nerfs"
+      "workingDirectory": "C:\\Users\\simon\\Documents\\data\\nerfs",
+      "nativeDebugging": true
     }
   }
 }

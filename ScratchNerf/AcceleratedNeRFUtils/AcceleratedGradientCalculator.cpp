@@ -1,5 +1,6 @@
 #include "AcceleratedGradientCalculator.h"
 
+#include <cstdio>
 #include <cuda_runtime.h>
 
 #include "helpers.h"
@@ -21,8 +22,10 @@ namespace AcceleratedNeRFUtils {
 		float* loss_mults_ptr = (float*)loss_mults;
 		cudaMemcpy(get_head_ptr(pixels), this->pixels, pixels->Length * sizeof(float3), cudaMemcpyHostToDevice);
 		float3* grad_ptr = gradient;
-		void* gog_args[6] = { &input_ptr, get_head_ptr(pixels), &loss_mults_ptr, &grad_ptr, &loss_mult_sum, &level};
+		float3* pixels_ptr = this->pixels;
+		void* gog_args[6] = { &input_ptr, &pixels_ptr, &loss_mults_ptr, &grad_ptr, &loss_mult_sum, &level};
 		cudaLaunchKernel((void*)get_output_gradient, dim3(pixels->Length) / block_1d, block_1d, gog_args);
+		cudaDeviceSynchronize();
 		return (uint64_t)grad_ptr;
 	}
 

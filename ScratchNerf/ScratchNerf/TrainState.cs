@@ -46,7 +46,7 @@ namespace ScratchNerf
     {
 
         public static DatasetType DatasetLoader { get; set; } = DatasetType.LLFF;  // The type of dataset loader to use.
-        public static int BatchSize { get; set; } = 1024;  // The number of rays/pixels in each batch.
+        public static int BatchSize { get; set; } = 128;  // The number of rays/pixels in each batch.
         public static int Factor { get; set; } = 0;  // The downsample factor of images, 0 for no downsampling.
         public static bool Spherify { get; set; } = false;  // Set to True for spherical 360 scenes.
         public static bool RenderPath { get; set; } = false;  // If True, render a path. Used only by LLFF.

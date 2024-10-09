@@ -1,8 +1,7 @@
 // ReSharper disable IdentifierTypo
 #include "AcceleratedMLP.h"
-
+#include <cstdio>
 #include <ctime>
-
 #include "helpers.h"
 
 void initialize_curand(curandState* states, int size)
@@ -18,31 +17,29 @@ void initialize_weights(curandState* states, float* weights, float* biases, int 
     void* ig_args[5] = { &states, &weights, &biases, &num_rows, &num_cols };
     cudaLaunchKernel((void*)initialize_glorot, dim3(num_cols, num_rows) / block_2d, block_2d, ig_args);
 }
-constexpr int sample_num = 128;
-constexpr int ray_num = 1024;
 void apply_layer(float* inputs, float* weights, float* biases, float* outputs, float* weighted_sums, int num_neurons, int input_size)
 {
     extern void get_neuron_output(const float*, const float*, const float*, float*, float*, const int, const int);
     void* gno_args[7] = { &inputs, &weights, &biases, &outputs, &weighted_sums, &num_neurons, &input_size };
-    cudaLaunchKernel((void*)get_neuron_output, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, gno_args);
+    cudaLaunchKernel((void*)get_neuron_output, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, gno_args);
 }
 void apply_sigmoid_layer(float* inputs, float* weights, float* biases, float* outputs, float* weighted_sums, int num_neurons, int input_size)
 {
     extern void get_neuron_output_sigmoid(const float*, const float*, const float*, float*, float*, const int, const int);
     void* gnos_args[7] = { &inputs, &weights, &biases, &outputs, &weighted_sums, &num_neurons, &input_size };
-    cudaLaunchKernel((void*)get_neuron_output_sigmoid, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, gnos_args);
+    cudaLaunchKernel((void*)get_neuron_output_sigmoid, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, gnos_args);
 }
 void apply_soft_plus_layer(float* inputs, float* weights, float* biases, float* outputs, float* weighted_sums, int num_neurons, int input_size)
 {
     extern void get_neuron_output_soft_plus(const float*, const float*, const float*, float*, float*, const int, const int);
     void* gnosp_args[7] = { &inputs, &weights, &biases, &outputs, &weighted_sums, &num_neurons, &input_size };
-    cudaLaunchKernel((void*)get_neuron_output_soft_plus, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, gnosp_args);
+    cudaLaunchKernel((void*)get_neuron_output_soft_plus, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, gnosp_args);
 }
 void apply_layer_conjoined_inputs(float* inputs_a, float* inputs_b, float* weights, float* biases, float* outputs, float* weighted_sums, int num_neurons, int input_size_a, int input_size_b)
 {
     extern void get_neuron_output_conjoined_inputs(const float*, const float*, const float*, const float*, float*, float*, const int, const int, const int);
     void* gnoci_args[9] = { &inputs_a, &inputs_b, &weights, &biases, &outputs, &weighted_sums, &num_neurons, &input_size_a, &input_size_b };
-    cudaLaunchKernel((void*)get_neuron_output_conjoined_inputs, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, gnoci_args);
+    cudaLaunchKernel((void*)get_neuron_output_conjoined_inputs, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, gnoci_args);
 }
 void backpropagate_layer(float* inputs, float* weights, float* weighted_sums, float* output_gradient,
     float* input_gradient, float* weight_gradient, float* bias_gradient, int num_neurons,
@@ -53,7 +50,7 @@ void backpropagate_layer(float* inputs, float* weights, float* weighted_sums, fl
         float*, float*, float*,
         const int, const int);
     void* bn_args[9] = { &inputs, &weights, &weighted_sums, &output_gradient, &input_gradient, &weight_gradient, &bias_gradient, &num_neurons, &input_size };
-    cudaLaunchKernel((void*)backpropagate_neuron, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, bn_args);
+    cudaLaunchKernel((void*)backpropagate_neuron, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, bn_args);
 }
 void backpropagate_sigmoid_layer(float* inputs, float* weights, float* weighted_sums, float* output_gradient,
     float* input_gradient, float* weight_gradient, float* bias_gradient, int num_neurons,
@@ -64,7 +61,7 @@ void backpropagate_sigmoid_layer(float* inputs, float* weights, float* weighted_
         float*, float*, float*,
         const int, const int);
     void* bns_args[9] = { &inputs, &weights, &weighted_sums, &output_gradient, &input_gradient, &weight_gradient, &bias_gradient, &num_neurons, &input_size };
-    cudaLaunchKernel((void*)backpropagate_neuron_sigmoid, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, bns_args);
+    cudaLaunchKernel((void*)backpropagate_neuron_sigmoid, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, bns_args);
 }
 void backpropagate_soft_plus_layer(float* inputs, float* weights, float* weighted_sums, float* output_gradient,
     float* input_gradient, float* weight_gradient, float* bias_gradient, int num_neurons,
@@ -75,7 +72,7 @@ void backpropagate_soft_plus_layer(float* inputs, float* weights, float* weighte
         float*, float*, float*,
         const int, const int);
     void* bnsp_args[9] = { &inputs, &weights, &weighted_sums, &output_gradient, &input_gradient, &weight_gradient, &bias_gradient, &num_neurons, &input_size };
-    cudaLaunchKernel((void*)backpropagate_neuron_soft_plus, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, bnsp_args);
+    cudaLaunchKernel((void*)backpropagate_neuron_soft_plus, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, bnsp_args);
 }
 void backpropagate_layer_partial_conjoined(float* inputs_a, float* inputs_b, float* weights, float* weighted_sums, float* output_gradient,
     float* input_a_gradient, float* weight_gradient, float* bias_gradient, int num_neurons,
@@ -86,30 +83,30 @@ void backpropagate_layer_partial_conjoined(float* inputs_a, float* inputs_b, flo
         float*, float*, float*,
         const int, const int, const int);
     void* bnpc_args[11] = { &inputs_a, &inputs_b, &weights, &weighted_sums, &output_gradient, &input_a_gradient, &weight_gradient, &bias_gradient, &num_neurons, &input_a_size, &input_b_size };
-    cudaLaunchKernel((void*)backpropagate_neuron_partial_conjoined, dim3(num_neurons, ray_num, sample_num) / block_3d, block_3d, bnpc_args);
+    cudaLaunchKernel((void*)backpropagate_neuron_partial_conjoined, dim3(num_neurons, num_rays, num_samples) / block_3d, block_3d, bnpc_args);
 }
 namespace AcceleratedNeRFUtils {
     void AcceleratedMLP::do_malloc_step(int num_neurons, int num_neurons_prev, int index)
     {
         cudaMalloc(get_head_ptr(weights_) + index, num_neurons * num_neurons_prev * sizeof(float));
         cudaMalloc(get_head_ptr(biases_) + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(outputs_) + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(outputs_) + net_depth + net_depth_condition + 2 + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(weighted_sums_) + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(weighted_sums_) + net_depth + net_depth_condition + 2 + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(input_grads_) + index, num_neurons_prev * sizeof(float));
+        cudaMalloc(get_head_ptr(outputs_) + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(outputs_) + net_depth + net_depth_condition + 2 + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(weighted_sums_) + index, num_neurons * num_samples * sizeof(float));
+        cudaMalloc(get_head_ptr(weighted_sums_) + net_depth + net_depth_condition + 2 + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(input_grads_) + index, num_neurons_prev * num_samples * num_rays * sizeof(float));
         cudaMalloc(get_head_ptr(weight_grads_) + index, num_neurons * num_neurons_prev * sizeof(float));
         cudaMalloc(get_head_ptr(bias_grads_) + index, num_neurons * sizeof(float));
     }
     void AcceleratedMLP::reset_layer_gradients(int num_neurons, int num_neurons_prev, int index)
     {
-        cudaMemset(get_head_ptr(input_grads_) + index, 0, num_neurons_prev * sizeof(float));
+        cudaMemset(get_head_ptr(input_grads_) + index, 0, num_neurons_prev * num_samples * num_rays * sizeof(float));
         cudaMemset(get_head_ptr(weight_grads_) + index, 0, num_neurons * num_neurons_prev * sizeof(float));
         cudaMemset(get_head_ptr(bias_grads_) + index, 0, num_neurons * sizeof(float));
     }
     void AcceleratedMLP::reset_conjoined_layer_gradients(int num_neurons, int num_neurons_prev, int num_added_inputs, int index)
     {
-        cudaMemset(get_head_ptr(input_grads_) + index, 0, num_neurons_prev * sizeof(float));
+        cudaMemset(get_head_ptr(input_grads_) + index, 0, num_neurons_prev * num_samples * num_rays * sizeof(float));
         cudaMemset(get_head_ptr(weight_grads_) + index, 0, num_neurons * (num_neurons_prev + num_added_inputs) * sizeof(float));
         cudaMemset(get_head_ptr(bias_grads_) + index, 0, num_neurons * sizeof(float));
     }
@@ -160,11 +157,11 @@ namespace AcceleratedNeRFUtils {
     {
         cudaMalloc(get_head_ptr(weights_) + index, num_neurons * (num_neurons_prev + additional_inputs) * sizeof(float));
         cudaMalloc(get_head_ptr(biases_) + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(outputs_) + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(outputs_) + net_depth + net_depth_condition + 2 + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(weighted_sums_) + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(weighted_sums_) + net_depth + net_depth_condition + 2 + index, num_neurons * sizeof(float));
-        cudaMalloc(get_head_ptr(input_grads_) + index, num_neurons_prev * sizeof(float));
+        cudaMalloc(get_head_ptr(outputs_) + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(outputs_) + net_depth + net_depth_condition + 2 + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(weighted_sums_) + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(weighted_sums_) + net_depth + net_depth_condition + 2 + index, num_neurons * num_samples * num_rays * sizeof(float));
+        cudaMalloc(get_head_ptr(input_grads_) + index, num_neurons_prev * num_samples * num_rays * sizeof(float));
         cudaMalloc(get_head_ptr(weight_grads_) + index, num_neurons * (num_neurons_prev + additional_inputs) * sizeof(float));
         cudaMalloc(get_head_ptr(bias_grads_) + index, num_neurons * sizeof(float));
     }
@@ -265,21 +262,35 @@ namespace AcceleratedNeRFUtils {
             input_grads_[net_depth + 1 + net_depth_condition],
             weight_grads_[net_depth + 1 + net_depth_condition],
             bias_grads_[net_depth + 1 + net_depth_condition], num_rgb_channels, net_width_condition);
-        cudaDeviceSynchronize();
+        if (cudaDeviceSynchronize() == cudaSuccess)
+			printf("No error after backpropagate_sigmoid_layer\n");
+		else
+			printf("bsl ");
         for (int i = net_depth_condition - 1; i >= 1; i--)
         {
             backpropagate_layer(outputs_[net_depth + i], weights_[net_depth + 1 + i], weighted_sums_[net_depth + 1 + i],
                 input_grads_[net_depth + i + 1], input_grads_[net_depth + i], weight_grads_[net_depth + 1 + i],
                 bias_grads_[net_depth + 1 + i], net_width_condition, net_width_condition);
-            cudaDeviceSynchronize();
+            if (cudaDeviceSynchronize() == cudaSuccess)
+                printf("No error after backpropagate_layer\n");
+            else
+                printf("bl ");
         }
         backpropagate_layer_partial_conjoined(outputs_[net_depth - 1], encoded_direction, weights_[net_depth + 1],
             weighted_sums_[net_depth + 1], input_grads_[net_depth + 1],
             input_grads_[net_depth - 1], weight_grads_[net_depth + 1],
             bias_grads_[net_depth + 1], net_width_condition, net_width, direction_dimension * direction_encodings);
+        if (cudaDeviceSynchronize() == cudaSuccess)
+			printf("No error after backpropagate_layer_partial_conjoined\n");
+		else
+			printf("blpc ");
         backpropagate_soft_plus_layer(outputs_[net_depth - 1], weights_[net_depth], weighted_sums_[net_depth],
             density_gradient, input_grads_[net_depth - 1], weight_grads_[net_depth],
             bias_grads_[net_depth], net_width, num_density_channels);
+        if (cudaDeviceSynchronize() == cudaSuccess)
+            printf("No error after backpropagate_soft_plus_layer\n");
+        else
+            printf("bspl ");
         for (int i = net_depth - 1; i >= 1; i--)
         {
             if (i % skip_layer == 0)
@@ -290,9 +301,17 @@ namespace AcceleratedNeRFUtils {
             else
                 backpropagate_layer(outputs_[i - 1], weights_[i], weighted_sums_[i], input_grads_[i + 1], input_grads_[i],
                     weight_grads_[i], bias_grads_[i], net_width, net_width);
+            if (cudaDeviceSynchronize() == cudaSuccess)
+				printf("No error after backpropagate_layer%s\n", i%skip_layer==0?"_partial_conjoined":"");
+			else
+				printf(i % skip_layer == 0 ? "blpc " : "bl ");
         }
         backpropagate_layer(encoded_position, weights_[0], weighted_sums_[0], input_grads_[1], input_grads_[0],
             weight_grads_[0], bias_grads_[0], net_width, location_dimension * location_encodings);
+        if (cudaDeviceSynchronize() == cudaSuccess)
+            printf("No error after backpropagate_layer\n");
+        else
+            printf("bl ");
         for (int i = 0; i < net_depth + net_depth_condition + 2; i++)
         {
             allGradients[i] = weight_grads_[i];

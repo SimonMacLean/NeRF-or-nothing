@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace ScratchNerf
 {
-    static class Flags
+    internal static class Flags
     {
         public static string dataDir = Path.Join(Environment.CurrentDirectory, "/nerf_llff_data/fern/");
     }

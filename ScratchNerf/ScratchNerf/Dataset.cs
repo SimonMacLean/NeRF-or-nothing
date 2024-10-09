@@ -199,16 +199,19 @@ namespace ScratchNerf
             return (rayIndices.Select((i) => rays[i.Item1, i.Item2, i.Item3]).ToArray(), rayIndices.Select((i) => pixels[i.Item1, i.Item2, i.Item3]).ToArray());
         }
     }
-    class Multicam(Split split, string dataDir) : Dataset(split, dataDir)
+
+    internal class Multicam(Split split, string dataDir) : Dataset(split, dataDir)
     {
-        Dictionary<string, object> metadata;
+        private Dictionary<string, object> metadata;
         public override void LoadRenderings() => throw new NotImplementedException();
     }
-    class Blender(Split split, string dataDir) : Dataset(split, dataDir)
+
+    internal class Blender(Split split, string dataDir) : Dataset(split, dataDir)
     {
         public override void LoadRenderings() => throw new NotImplementedException();
     }
-    class LLFF(Split split, string dataDir) : Dataset(split, dataDir)
+
+    internal class LLFF(Split split, string dataDir) : Dataset(split, dataDir)
     {
         private int resolution;
         public override void LoadRenderings()
