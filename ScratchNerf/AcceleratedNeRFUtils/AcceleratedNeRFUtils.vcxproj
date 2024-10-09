@@ -21,9 +21,9 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <EnableManagedPackageReferenceSupport>true</EnableManagedPackageReferenceSupport>
-    <ProjectGuid>{17AC6A10-F365-4308-87FE-F84D9827A590}</ProjectGuid>
+    <ProjectGuid>{59B68499-EE70-4996-813D-EB073180834A}</ProjectGuid>
     <Keyword>NetCoreCProj</Keyword>
-    <RootNamespace>AcceleratedUtils</RootNamespace>
+    <RootNamespace>AcceleratedNeRFUtils</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
@@ -76,13 +76,13 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup />
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <AdditionalDependencies />
+      <AdditionalDependencies>cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
@@ -94,19 +94,6 @@
       <AdditionalDependencies />
     </Link>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <ClCompile>
-      <WarningLevel>Level3</WarningLevel>
-      <PreprocessorDefinitions>_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories);$(CudaToolkitIncludeDir)</AdditionalIncludeDirectories>
-    </ClCompile>
-    <Link>
-      <AdditionalDependencies>cudart.lib;%(AdditionalDependencies)</AdditionalDependencies>
-    </Link>
-    <CudaCompile>
-      <Include>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.1\include</Include>
-    </CudaCompile>
-  </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -116,23 +103,31 @@
       <AdditionalDependencies />
     </Link>
   </ItemDefinitionGroup>
-  <ItemGroup>
-    <None Include="accelerated_functions.cu" />
-  </ItemGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
+    <ClCompile>
+      <WarningLevel>Level3</WarningLevel>
+      <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link>
+      <AdditionalDependencies />
+    </Link>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="AcceleratedAdamOptimizer.h" />
+    <ClInclude Include="AcceleratedGradientCalculator.h" />
     <ClInclude Include="AcceleratedMipNeRF.h" />
     <ClInclude Include="AcceleratedMLP.h" />
+    <ClInclude Include="helpers.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AcceleratedAdamOptimizer.cpp" />
+    <ClCompile Include="AcceleratedGradientCalculator.cpp" />
     <ClCompile Include="AcceleratedMipNeRF.cpp" />
     <ClCompile Include="AcceleratedMLP.cpp" />
+    <ClCompile Include="helpers.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\ScratchNerf\ScratchNerf.csproj">
-      <Project>{2d4794fc-0f44-4048-8d92-4f008ab5f0a5}</Project>
-    </ProjectReference>
+    <CudaCompile Include="accelerated_functions.cu" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

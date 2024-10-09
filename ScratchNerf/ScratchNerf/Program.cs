@@ -1,4 +1,5 @@
 using System.Numerics;
+using AcceleratedNeRFUtils;
 
 namespace ScratchNerf
 {
@@ -20,14 +21,9 @@ namespace ScratchNerf
         static void Train()
         {
             BinDataset binDataset = new("C:\\Users\\simon\\Desktop\\mipnerf-main\\train_data.bin");
-            (MipNerfModel model, float[] variables) = MipNerfModel.ConstructMipNerf();
-
-            int numParams = variables.Length;
-            Console.WriteLine($"Number of parameters being optimized: {numParams}");
-
-            AdamOptimizer optimizer = new(numParams, Config.LrInit);
-            TrainState state = new(optimizer);
-
+            AcceleratedMipNeRF model = new();
+            AcceleratedAdamOptimizer optimizer = new(model.GetLayerSizes());
+            AcceleratedGradientCalculator gradientCalculator = new(BinDataset.BatchSize);
             Func<int, float> learningRateFn = step => MathHelpers.LearningRateDecay(
                 step,
                 Config.LrInit,
@@ -39,75 +35,26 @@ namespace ScratchNerf
 
             for (int step = 1; step <= Config.MaxSteps; step++)
             {
-                (Ray[] rays, Vector3[] pixels) batch = binDataset.Next();
+                (Rays rays, Vector3[] pixels) batch = binDataset.Next();
                 float lr = learningRateFn(step);
 
-                StatsUtil stats = TrainStep(model, state, batch, lr);
+                TrainStep(model, optimizer, gradientCalculator, batch, lr);
 
                 if (step % Config.PrintEvery == 0)
                 {
-                    Console.WriteLine($@"Step {step}/{Config.MaxSteps}: loss={stats.loss:F4}, psnr={stats.psnr:F2}, lr={lr:E2}");
+                    Console.WriteLine($@"Step {step}/{Config.MaxSteps}");
                 }
             }
         }
 
-        static StatsUtil TrainStep(MipNerfModel model, TrainState state, (Ray[] rays, Vector3[] pixels) batch, float learningRate)
+        static unsafe void TrainStep(AcceleratedMipNeRF model, AcceleratedAdamOptimizer optimizer, AcceleratedGradientCalculator gradientCalculator, (Rays rays, Vector3[] pixels) batch, float learningRate)
         {
-            int numLevels = model.NumLevels;
-            int numRays = batch.rays.Length;
-            float[] mask = batch.rays.Select((ray) => ray.LossMult).ToArray();
-            Vector3[,] GetGradient(
-                Vector3[,] returnedValue)
-            {
-                Vector3[,] gradient =
-                    new Vector3[numLevels,
-                        returnedValue.GetLength(1)];
-
-                for (int level = 0; level < numLevels; level++)
-                {
-                    float totalMask = mask.Sum();
-                    for (int i = 0; i < returnedValue.GetLength(1); i++)
-                    {
-                        Vector3 diffRgb = returnedValue[level, i] - batch.pixels[i];
-                        float maskFactor = mask[i] / totalMask;
-                        gradient[level, i] = 2 * maskFactor * diffRgb;
-                        if (level < numLevels - 1)
-                        {
-                            gradient[level, i] *= Config.CoarseLossMult;
-                        }
-                    }
-                }
-
-                return gradient;
-            }
-            (StatsUtil stats, float[] gradient) = model.GetGradient(batch.rays, Config.Randomized, Config.WhiteBkgd, GetGradient, (x) => LossFn(x, batch));
-            float[] variables = model.mlp.allParams;
-            for (int i = 0; i < variables.Length; i++)
-            {
-                gradient[i] += Config.WeightDecayMult * variables[i];
-            }
-            if(Config.GradMaxVal > 0) gradient = gradient.Select((x) => Math.Clamp(x, -Config.GradMaxVal, Config.GradMaxVal)).ToArray();
-            float gradMaxAbs = gradient.Max(Math.Abs);
-            float gradNorm = MathF.Sqrt(gradient.Select((x) => x * x).Sum());
-            if(Config.GradMaxNorm > 0 && gradNorm > Config.GradMaxNorm)
-            {
-                gradient = gradient.Select((x) => x * Config.GradMaxNorm / gradNorm).ToArray();
-            }
-            float gradNormClipped = MathF.Sqrt(gradient.Select((x) => x * x).Sum());
-            state.Optimizer.Step(variables, gradient);
-            float[] psnrs = stats.losses.Select(MathHelpers.MseToPsnr).ToArray();
-            stats = new StatsUtil
-            {
-                loss = stats.loss,
-                losses = stats.losses,
-                weightL2 = stats.weightL2,
-                gradAbsMax = gradMaxAbs,
-                gradNorm = gradNorm,
-                gradNormClipped = gradNormClipped,
-                psnrs = psnrs,
-                psnr = psnrs[^1]
-            };
-            return stats;
+            float*[] grad = model.GetGradient(batch.rays.Origins, batch.rays.Directions, batch.rays.Radii,
+                batch.rays.Nears, batch.rays.Fars, batch.rays.LossMults,
+                (inputptr, level, lossMultSum, lossMults) =>
+                    gradientCalculator.get_output_gradient(inputptr, batch.pixels, lossMults, lossMultSum, level));
+            float*[] variables = model.mlp.allParams;
+            optimizer.step(variables, grad, learningRate);
         }
         static (float, StatsUtil) LossFn(MipNerfModel model, Random rng, TrainState state, (Ray[] rays, Vector3[] pixels) batch, float learningRate)
         {

@@ -1,16 +1,8 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
+﻿using System.Numerics;
+using System.Runtime.InteropServices;
+using AcceleratedNeRFUtils;
 namespace ScratchNerf
 {
-    using System;
-    using System.Collections.Generic;
-    using System.Numerics;
-    using System.Reflection;
-    using System.Runtime.InteropServices;
 
     public class MipNerfModel
     {
@@ -105,7 +97,7 @@ namespace ScratchNerf
         }
 
         public (StatsUtil, float[]) GetGradient(Ray[] rays, bool randomized, bool whiteBackground,
-            Func<(Vector3 CompositeRgb, float Distance, float Accumulation)[,] , Vector3[,]> getReturnGradient, Func<(Vector3 CompositeRgb, float Distance, float Accumulation)[,], (float loss, StatsUtil stats)> LossFn)
+            Func<Vector3[,], Vector3[,]> getReturnGradient, Func<(Vector3 CompositeRgb, float Distance, float Accumulation)[,], (float loss, StatsUtil stats)> LossFn)
         {
             int numRays = rays.Length;
             (Vector3 CompositeRgb, float Distance, float Accumulation)[,] results =
@@ -136,7 +128,7 @@ namespace ScratchNerf
                         Ray r = rays[iRay];
                         res[iLevel, iRay] = MipHelpers.ResampleAlongRay(rng, r.Origin, r.Direction, r.Radius,
                             res[iLevel - 1, iRay].tVals,
-                            weights[iLevel - 1, iRay], randomized, RayShape, StopLevelGrad, ResamplePadding);
+                            weights[iLevel - 1, iRay], randomized, RayShape, ResamplePadding);
                     }
                 }
 
@@ -167,7 +159,10 @@ namespace ScratchNerf
                 }
             }
             Console.WriteLine();
-            Vector3[,] rgbGradient = getReturnGradient(results);
+            Vector3[,] rgb_ = new Vector3[NumLevels, numRays];
+            for (int iLevel = 0; iLevel < NumLevels; iLevel++)
+            for (int iRay = 0; iRay < numRays; iRay++) rgb_[iLevel, iRay] = results[iLevel, iRay].CompositeRgb;
+            Vector3[,] rgbGradient = getReturnGradient(rgb_);
             (float loss, StatsUtil stats) = LossFn(results);
             Console.WriteLine($"Loss: {loss}");
             (Vector3 rgbGradient, float densityGradient)[,][] finalOutputGradient = new (Vector3 rgbGradient, float densityGradient)[NumLevels,numRays][];
@@ -177,9 +172,8 @@ namespace ScratchNerf
             {
                 for (int iRay = 0; iRay < numRays; iRay++)
                 {
-                    finalOutputGradient[iLevel, iRay] = MipHelpers.VolumetricRenderingGradient(rgbGradient[iLevel, iRay],
-                        results[iLevel, iRay].Distance, results[iLevel, iRay].Accumulation, alpha[iLevel, iRay],
-                        transmittance[iLevel, iRay], weights[iLevel, iRay], res[iLevel, iRay].tVals, rays[iRay].Direction,
+                    finalOutputGradient[iLevel, iRay] = MipHelpers.VolumetricRenderingGradient(rgbGradient[iLevel, iRay], alpha[iLevel, iRay],
+                        transmittance[iLevel, iRay], weights[iLevel, iRay],  finalOutput[iLevel, iRay], res[iLevel, iRay].tVals, rays[iRay].Direction,
                         whiteBackground);
                     for (int iSample = 0; iSample < res[iLevel, iRay].samples.Length; iSample++)
                     {
@@ -205,9 +199,9 @@ namespace ScratchNerf
             return (stats, summedParamsGradient);
         }
 
-        public static (MipNerfModel, float[]) ConstructMipNerf()
+        public static unsafe (AcceleratedMipNeRF, float*[]) ConstructMipNerf()
         {
-            MipNerfModel model = new();
+            AcceleratedMipNeRF model = new();
             return (model, model.mlp.allParams);
         }
 
@@ -223,6 +217,16 @@ namespace ScratchNerf
         public float Near = near;
         public float Far = far;
         public float LossMult = lossMult;
+    }
+    public struct Rays(int size)
+    {
+        public Vector3[] Origins = new Vector3[size];
+        public Vector3[] Directions = new Vector3[size];
+        public Vector3[] ViewDirs = new Vector3[size];
+        public float[] Radii = new float[size];
+        public float[] Nears = new float[size];
+        public float[] Fars = new float[size];
+        public float[] LossMults = new float[size];
     }
 
 }

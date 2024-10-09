@@ -528,7 +528,6 @@ namespace ScratchNerf
             Vector3[] colorGradients = new Vector3[numSamples];
             float[] densityGradients = new float[numSamples];
             float[] dLdWeights = new float[numSamples - 1];
-
             // Compute gradients with respect to weights and colors
             for (int i = 0; i < numSamples - 1; i++)
             {
