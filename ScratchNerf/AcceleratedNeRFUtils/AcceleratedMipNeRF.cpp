@@ -7,6 +7,7 @@ namespace AcceleratedNeRFUtils
 	AcceleratedMipNeRF::AcceleratedMipNeRF()
 	{
 		extern void initialize_curand(curandState * states, const unsigned long long seed, const int size);
+		cudaSetDevice(0);
 		float3* dev_origins_ptr, * dev_directions_ptr;
 		float* dev_radii_ptr, * dev_nears_ptr, * dev_fars_ptr, * dev_loss_mults_ptr;
 		curandState* dev_states_ptr;
@@ -171,5 +172,6 @@ namespace AcceleratedNeRFUtils
 			cudaFree(get_head_ptr(dev_color_grad_) + i);
 			cudaFree(get_head_ptr(dev_density_grad_) + i);
 		}
+		cudaDeviceReset();
 	}
 }
